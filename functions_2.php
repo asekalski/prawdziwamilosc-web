@@ -6060,6 +6060,107 @@ function pm_bm_ios_fullscreen_fix_mobile_wrap() {
       }
     }
     </style>
+    
+    <script>
+    // Smart Polling & Optimistic Updates for Better Messages
+    (function() {
+        let pollingInterval = null;
+        let currentThreadId = null;
+        
+        // Start smart polling when chat is opened
+        function startSmartPolling() {
+            if (pollingInterval) return; // Already polling
+            
+            pollingInterval = setInterval(() => {
+                // Refresh messages for current thread
+                if (currentThreadId && typeof BetterMessages !== 'undefined') {
+                    console.log('[Smart Poll] Refreshing messages...');
+                    // Better Messages has a method to refresh current thread
+                    if (BetterMessages.functions && BetterMessages.functions.updateThread) {
+                        BetterMessages.functions.updateThread(currentThreadId);
+                    }
+                }
+            }, 10000); // Poll every 10 seconds
+        }
+        
+        // Stop polling when chat closed
+        function stopSmartPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+                console.log('[Smart Poll] Stopped');
+            }
+        }
+        
+        // Initialize when document ready
+        document.addEventListener('DOMContentLoaded', function() {
+            // Detect when chat thread is opened
+            document.addEventListener('click', function(e) {
+                const threadLink = e.target.closest('.thread');
+                if (threadLink) {
+                    const threadId = threadLink.dataset.threadId || threadLink.getAttribute('data-thread-id');
+                    if (threadId) {
+                        currentThreadId = threadId;
+                        startSmartPolling();
+                    }
+                }
+            });
+            
+            // Optimistic Update - show message immediately
+            document.addEventListener('submit', function(e) {
+                if (e.target.closest('.bm-reply-form, .bp-messages-reply-form')) {
+                    const textarea = e.target.querySelector('textarea[name="message"]');
+                    const messageText = textarea ? textarea.value.trim() : '';
+                    
+                    if (messageText) {
+                        // Create optimistic message element
+                        const messagesList = document.querySelector('.bpbm-messages-list, .bp-messages-thread');
+                        if (messagesList) {
+                            const optimisticMsg = document.createElement('div');
+                            optimisticMsg.className = 'message bp-messages-item outgoing optimistic-message';
+                            optimisticMsg.innerHTML = `
+                                <div class="message-content">
+                                    <div class="message-text">${escapeHtml(messageText)}</div>
+                                    <div class="message-time">Wysyłanie...</div>
+                                </div>
+                            `;
+                            optimisticMsg.style.opacity = '0.7';
+                            messagesList.appendChild(optimisticMsg);
+                            messagesList.scrollTop = messagesList.scrollHeight;
+                            
+                            // Clear textarea immediately
+                            textarea.value = '';
+                            
+                            // Remove optimistic message after 2 seconds (will be replaced by real message from poll)
+                            setTimeout(() => {
+                                optimisticMsg.style.transition = 'opacity 0.3s';
+                                optimisticMsg.style.opacity = '1';
+                            }, 500);
+                        }
+                    }
+                }
+            });
+            
+            // Stop polling when user leaves messages page
+            const observer = new MutationObserver(() => {
+                if (!document.querySelector('.bp-messages-wrap')) {
+                    stopSmartPolling();
+                    currentThreadId = null;
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        });
+        
+        // Helper function to escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        console.log('[Smart Polling] Initialized');
+    })();
+    </script>
     <?php
 }
 add_action( 'wp_head', 'pm_bm_ios_fullscreen_fix_mobile_wrap', 80 );
@@ -6183,5 +6284,101 @@ function sk_get_matches_endpoint($request) {
     }
     
     return rest_ensure_response($results);
+}
+
+// ========================================
+// Custom Registration Endpoint
+// ========================================
+add_action('rest_api_init', function () {
+    register_rest_route('sk/v1', '/register', [
+        'methods' => 'POST',
+        'callback' => 'sk_register_user',
+        'permission_callback' => '__return_true', // Public endpoint
+    ]);
+});
+
+function sk_register_user($request) {
+    $username = sanitize_user($request->get_param('user_login'));
+    $email = sanitize_email($request->get_param('user_email'));
+    $password = $request->get_param('password');
+    
+    // Walidacja
+    if (empty($username) || empty($email) || empty($password)) {
+        return new WP_Error('missing_fields', 'Wszystkie pola są wymagane', ['status' => 400]);
+    }
+    
+    if (!is_email($email)) {
+        return new WP_Error('invalid_email', 'Nieprawidłowy adres email', ['status' => 400]);
+    }
+    
+    if (username_exists($username)) {
+        return new WP_Error('username_exists', 'Nazwa użytkownika już istnieje', ['status' => 400]);
+    }
+    
+    if (email_exists($email)) {
+        return new WP_Error('email_exists', 'Email już jest zarejestrowany', ['status' => 400]);
+    }
+    
+    if (strlen($password) < 6) {
+        return new WP_Error('weak_password', 'Hasło musi mieć minimum 6 znaków', ['status' => 400]);
+    }
+    
+    // Użyj BuddyPress signup z email verification
+    $signup_id = bp_core_signup_user(
+        $username,
+        $password,
+        $email,
+        ['field_1' => ''] // Puste meta - można później rozszerzyć
+    );
+    
+    if (is_wp_error($signup_id)) {
+        return new WP_Error('registration_failed', $signup_id->get_error_message(), ['status' => 500]);
+    }
+    
+    // Email z linkiem aktywacyjnym został wysłany przez BuddyPress
+    return rest_ensure_response([
+        'success' => true,
+        'message' => 'Konto zostało utworzone. Sprawdź email aby aktywować konto.',
+        'username' => $username,
+        'email' => $email,
+        'requires_activation' => true,
+    ]);
+}
+
+
+
+// ============================================================================
+// ENDPOINT AKTYWACJI KONTA
+// ============================================================================
+
+add_action('rest_api_init', 'register_user_activation_endpoint');
+function register_user_activation_endpoint() {
+    register_rest_route('sk/v1', '/activate', [
+        'methods' => 'GET',
+        'callback' => 'sk_activate_user',
+        'permission_callback' => '__return_true',
+    ]);
+}
+
+function sk_activate_user($request) {
+    $activation_key = sanitize_text_field($request->get_param('key'));
+    $user_login = sanitize_user($request->get_param('user'));
+    
+    if (empty($activation_key) || empty($user_login)) {
+        return new WP_Error('missing_params', 'Brak klucza aktywacyjnego lub nazwy użytkownika', ['status' => 400]);
+    }
+    
+    $activate = bp_core_activate_signup($activation_key);
+    
+    if (is_wp_error($activate)) {
+        return new WP_Error('activation_failed', $activate->get_error_message(), ['status' => 400]);
+    }
+    
+    return rest_ensure_response([
+        'success' => true,
+        'message' => 'Konto zostało aktywowane pomyślnie!',
+        'user_id' => $activate['user_id'],
+        'username' => $activate['user_login'],
+    ]);
 }
 
