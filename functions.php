@@ -1,136 +1,47 @@
 <?php
-/**
- * Helper function to check if the current page is the dashboard or front page
- * 
- * This function provides a centralized way to detect if we're on pages that should
- * bypass custom routing and onboarding checks. It returns true for both the dashboard
- * page and the front page to ensure proper routing behavior.
- * 
- * Note: Despite the name, this function checks for both dashboard and front page.
- * The name is kept for backward compatibility.
- * 
- * @since 1.0.0
- * @return bool True if on dashboard page or front page, false otherwise
- */
-/**
- * Bezpieczna funkcja sprawdzania dashboardu/strony głównej
- */
-if ( ! defined( 'ONBOARDING_PAGE_ID' ) ) {
-    define( 'ONBOARDING_PAGE_ID', 1339 );
-}
-
-// Strona Dashboard
-if ( ! defined( 'DASHBOARD_PAGE_ID' ) ) {
-    define( 'DASHBOARD_PAGE_ID', 1318 );
-}
-
-// Strona Rejestracji
-if ( ! defined( 'REGISTRATION_PAGE_ID' ) ) {
-    define( 'REGISTRATION_PAGE_ID', 1254 );
-}
-
-
-/**
- * Super-stabilna funkcja sprawdzania Dashboardu
- */
-function is_dashboard_page()
+// Zapobiegaj błędowi 404 i wymuszaj załadowanie treści strony
+function zapobiegnij_404_dla_kroku()
 {
-    if (is_admin()) return false;
+    global $wp_query, $post;
 
-    // PRIORYTET 1: Sprawdzenie ścieżki URL (najbardziej niezawodne podczas refresh)
-    if (isset($_SERVER['REQUEST_URI'])) {
-        $path = trim(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH), '/');
-        
-        // Pobierz rzeczywiste slugi stron z bazy danych
-        $dashboard_page = get_post(DASHBOARD_PAGE_ID);
-        $registration_page = get_post(REGISTRATION_PAGE_ID);
-        $onboarding_page = get_post(ONBOARDING_PAGE_ID);
-        
-        // Sprawdź czy ścieżka pasuje do któregokolwiek sluga
-        $dashboard_slug = $dashboard_page ? $dashboard_page->post_name : '';
-        $registration_slug = $registration_page ? $registration_page->post_name : '';
-        $onboarding_slug = $onboarding_page ? $onboarding_page->post_name : '';
-        
-        if ($path === $dashboard_slug || 
-            $path === $registration_slug || 
-            $path === $onboarding_slug ||
-            $path === 'dashboard' ||  // Fallback dla starych linków
-            $path === 'rejestracja' || 
-            $path === 'onboarding') {
-            return true;
-        }
-        
-        // NIE sprawdzaj pustego path - strona główna NIE jest dashboardem!
-        // Usunięto: $path === ''
-    }
+    if (get_query_var('krok')) {
+        $page = get_post(1254); // ID Twojej strony Register-ONE
 
-    // PRIORYTET 2: Sprawdzenie ID aktualnej strony (działa gdy query jest już rozwiązane)
-    $current_id = get_queried_object_id();
-    if ($current_id > 0) {
-        $safe_ids = [DASHBOARD_PAGE_ID, REGISTRATION_PAGE_ID, ONBOARDING_PAGE_ID];
-        // NIE dodawaj page_on_front do safe_ids!
-        if (in_array($current_id, $safe_ids)) {
-            return true;
+        if ($page) {
+            // Wymuszamy setup strony
+            $post = $page;
+            $wp_query->queried_object = $page;
+            $wp_query->queried_object_id = $page->ID;
+            $wp_query->posts = array($page);
+            $wp_query->post = $page;
+            $wp_query->post_count = 1;
+            $wp_query->is_page = true;
+            $wp_query->is_singular = true;
+            $wp_query->is_404 = false;
+            $wp_query->is_posts_page = false;
+            $wp_query->is_home = false;
+
+            // Setup postdata dla poprawnego ładowania contentu
+            setup_postdata($post);
+
+            status_header(200);
         }
     }
-
-    return false;
 }
+add_action('template_redirect', 'zapobiegnij_404_dla_kroku', 1);
 
-/**
- * Helper do zmiennej krok
- */
-function get_krok_query_var()
-{
-    $krok = get_query_var('krok');
-    if (empty($krok) && isset($_GET['krok'])) {
-        $krok = sanitize_text_field(wp_unslash($_GET['krok']));
-    }
-    return $krok ?: false;
-}
-
-/**
- * Zmień query PRZED załadowaniem szablonu (Poprawny sposób WordPressa)
- * Tylko modyfikuje query gdy jest parametr 'krok' w URL
- */
+// Zmień query PRZED template_redirect
 function napraw_query_dla_kroku($query)
 {
-    // Nie ruszaj admina ani zapytań bocznych
-    if (is_admin() || !$query->is_main_query()) {
-        return;
+    if (!is_admin() && $query->is_main_query() && get_query_var('krok')) {
+        $page_id = 1254; // ID Twojej strony
+        $query->set('page_id', $page_id);
+        $query->is_page = true;
+        $query->is_singular = true;
+        $query->is_404 = false;
     }
-
-    // WAŻNE: Najpierw sprawdź czy w ogóle jest parametr 'krok'
-    // Jeśli go nie ma, nie dotykaj zapytania!
-    $krok = get_krok_query_var();
-    if (!$krok) {
-        return;
-    }
-
-    // Sprawdź czy to nie jest strona która powinna być pominięta
-    // Używamy page_id zamiast pagename, bo pagename może nie być jeszcze ustawione
-    $page_id = $query->get('page_id');
-    $safe_pages = [DASHBOARD_PAGE_ID, REGISTRATION_PAGE_ID, ONBOARDING_PAGE_ID, (int)get_option('page_on_front')];
-    
-    if ($page_id && in_array($page_id, $safe_pages)) {
-        return;
-    }
-    
-    // Jeśli jest strona główna, również nie modyfikuj
-    if ($query->is_front_page()) {
-        return;
-    }
-
-    // Tylko jeśli jest parametr krok I nie jesteśmy na bezpiecznej stronie,
-    // wtedy wymuszamy stronę rejestracji
-    $query->set('page_id', REGISTRATION_PAGE_ID);
-    $query->is_page = true;
-    $query->is_singular = true;
-    $query->is_404 = false;
-    $query->is_home = false;
 }
 add_action('pre_get_posts', 'napraw_query_dla_kroku');
-
 
 function dodaj_krok_query_var($vars)
 {
@@ -138,160 +49,6 @@ function dodaj_krok_query_var($vars)
     return $vars;
 }
 add_filter('query_vars', 'dodaj_krok_query_var');
-
-/**
- * AGGRESSIVE FIX: Completely disable canonical redirects that would redirect away from valid pages.
- * 
- * This is specifically designed to prevent WordPress from redirecting from the front page slug
- * (e.g., /dashboard) to the homepage (/) when a page is set as the front page.
- * 
- * WordPress has a built-in behavior where if you set a page as the front page in Settings > Reading,
- * it will redirect from the page slug to the homepage. This function completely blocks that behavior.
- *
- * This function runs at priority -1 (VERY early) to catch redirects before any other filters.
- *
- * @param string $redirect_url  URL that WordPress wants to redirect to.
- * @param string $requested_url URL that was originally requested.
- * @return string|false         URL to redirect to, or false to cancel redirect.
- */
-function pm_stop_home_canonical_redirect($redirect_url, $requested_url)
-{
-    // If there's no redirect, return early
-    if (empty($redirect_url)) {
-        return $redirect_url;
-    }
-
-    // Validate input types
-    if (!is_string($redirect_url) || !is_string($requested_url)) {
-        return $redirect_url;
-    }
-
-    // Parse both URLs to compare them
-    $requested_path_raw = parse_url($requested_url, PHP_URL_PATH);
-    $redirect_path_raw = parse_url($redirect_url, PHP_URL_PATH);
-    
-    // Handle parse_url failures
-    if ($requested_path_raw === false || $redirect_path_raw === false) {
-        return $redirect_url;
-    }
-
-    // Normalize paths (trim slashes, handle empty strings)
-    $requested_path = is_string($requested_path_raw) ? trim($requested_path_raw, '/') : '';
-    $redirect_path = is_string($redirect_path_raw) ? trim($redirect_path_raw, '/') : '';
-
-    // CRITICAL: If WordPress is trying to redirect us from a non-empty path to an empty path (homepage),
-    // this is almost certainly the front page slug redirect that we want to block
-    if ($requested_path !== '' && $redirect_path === '') {
-        // WordPress is trying to redirect from /something to /
-        // This is the front page redirect - block it unconditionally
-        return false;
-    }
-
-    // If we're on any subpage (not the homepage) and WordPress wants to redirect to a different page
-    if ($requested_path !== '' && $requested_path !== $redirect_path) {
-        // First, try to find the page in pages post type
-        $page = get_page_by_path($requested_path, OBJECT, 'page');
-        if ($page instanceof WP_Post && $page->post_status === 'publish') {
-            // We're on a valid published page, block the redirect
-            return false;
-        }
-        
-        // Also check for posts and other public post types
-        $post_types = get_post_types(array('public' => true), 'names');
-        foreach ($post_types as $post_type) {
-            $post = get_page_by_path($requested_path, OBJECT, $post_type);
-            if ($post instanceof WP_Post && $post->post_status === 'publish') {
-                // We're on a valid published resource, block the redirect
-                return false;
-            }
-        }
-        
-        // Check if it might be a BuddyPress or other plugin page
-        // If the path exists in WordPress routing (not 404), block the redirect
-        global $wp_query;
-        if (isset($wp_query) && !$wp_query->is_404()) {
-            // We have a valid WordPress resource, block the redirect
-            return false;
-        }
-        
-        // Also check via BuddyPress detection
-        if (function_exists('bp_core_get_user_domain')) {
-            // This looks like it might be a BuddyPress profile or page
-            // Block the redirect to be safe
-            return false;
-        }
-    }
-
-    return $redirect_url;
-}
-// Priority -1 to run BEFORE any other redirect_canonical filters
-add_filter('redirect_canonical', 'pm_stop_home_canonical_redirect', -1, 2);
-
-/**
- * Final safety net: Prevent any redirects on valid pages during template_redirect.
- * This runs with priority 1 (very early) to catch redirects before they happen.
- * 
- * IMPORTANT: This function only removes redirect_canonical when ALL conditions are met:
- * 1. We're on a singular published page (not admin, not 404, not archive)
- * 2. The requested URL path exactly matches the current page slug
- * 3. The path is non-empty (not homepage)
- * 
- * This targeted approach ensures we only disable redirects when absolutely necessary
- * to prevent the front-page slug redirect issue, while preserving other redirect
- * functionality like trailing slashes, www vs non-www, etc.
- * 
- * @return void
- */
-function pm_prevent_page_redirects() {
-    // Skip on admin
-    if (is_admin()) {
-        return;
-    }
-    
-    // Only act if we're on a singular page
-    if (!is_page()) {
-        return;
-    }
-    
-    // Get the current page object
-    $current_page = get_queried_object();
-    if (!($current_page instanceof WP_Post)) {
-        return;
-    }
-    
-    // Check if we're on a valid published page
-    if ($current_page->post_status !== 'publish') {
-        return;
-    }
-    
-    // Get the requested path from the URL
-    // Note: We use wp_unslash() only because parse_url() safely handles validation.
-    // We're not outputting this value, just using it for internal path comparison.
-    if (!isset($_SERVER['REQUEST_URI'])) {
-        return;
-    }
-    
-    $request_uri = wp_unslash($_SERVER['REQUEST_URI']);
-    $path_raw = parse_url($request_uri, PHP_URL_PATH);
-    
-    if ($path_raw === false || !is_string($path_raw)) {
-        return;
-    }
-    
-    $requested_path = trim($path_raw, '/');
-    
-    // If we have a non-empty path and it matches the current page slug,
-    // we want to stay on this page - so remove the redirect_canonical hook entirely
-    // Note: parse_url() returns decoded paths, so we need to handle URL encoding
-    if ($requested_path !== '' && 
-        ($requested_path === $current_page->post_name || urldecode($requested_path) === $current_page->post_name)) {
-        // Remove the redirect_canonical action for this request
-        // This prevents WordPress from redirecting /dashboard to / when dashboard is the front page
-        // We only do this when we're certain we're on a valid page with the correct URL
-        remove_action('template_redirect', 'redirect_canonical');
-    }
-}
-add_action('template_redirect', 'pm_prevent_page_redirects', 1);
 
 add_action('wp_enqueue_scripts', 'child_enqueue_styles');
 function child_enqueue_styles()
@@ -323,33 +80,6 @@ function enqueue_user_filters_script()
 }
 add_action('wp_enqueue_scripts', 'enqueue_user_filters_script');
 
-/**
- * Zmienia link logo na /dashboard zamiast strony głównej
- */
-function custom_logo_url($html)
-{
-    // Validate input
-    if (!is_string($html) || $html === '') {
-        return $html;
-    }
-    
-    // Replace the href attribute in the custom logo link
-    // This pattern matches both with and without trailing slash
-    $home = rtrim(home_url('/'), '/');
-    $dashboard = esc_url(home_url('/dashboard'));
-    
-    $result = preg_replace_callback(
-        '#href=(["\'])' . preg_quote($home, '#') . '\/?(["\'])#i',
-        function($matches) use ($dashboard) {
-            return 'href=' . $matches[1] . $dashboard . $matches[2];
-        },
-        $html
-    );
-    
-    // Return original HTML if preg_replace_callback failed
-    return ($result !== null) ? $result : $html;
-}
-add_filter('get_custom_logo', 'custom_logo_url');
 
 /**
  * =========================================================================
@@ -1519,7 +1249,7 @@ add_shortcode('odwiedzili_mnie_link', 'odwiedzili_mnie_link_shortcode');
 add_action('after_setup_theme', 'hide_admin_bar_for_users');
 function hide_admin_bar_for_users()
 {
-    if (!current_user_can('manage_options') && !is_admin()) {
+    if (!current_user_can('administrator') && !is_admin()) {
         show_admin_bar(false);
     }
 }
@@ -1643,51 +1373,21 @@ add_action('bn_notification_sent', function ($notification) {
  * WERSJA OSTATECZNA 6.4: Kompletna funkcja aktywacji z KONTROLĄ WIDOCZNOŚCI DATY
  * =========================================================================
  */
-add_action('bp_core_activated_user', 'prawidlowa_aktywacja_uzytkownika', 99, 3);
+add_action('bp_core_activated_user', 'prawidlowa_aktywacja_uzytkownika', 20, 3);
 
 function prawidlowa_aktywacja_uzytkownika($user_id, $key, $user)
 {
     global $wpdb;
-    
-    error_log("prawidlowa_aktywacja_uzytkownika called for user_id: $user_id, key: $key");
-    error_log("User object type: " . gettype($user));
-    error_log("User object: " . print_r($user, true));
-    
-    $meta = null;
-    
-    // Metoda 1: Pobierz meta z obiektu $user (przekazywany przez hook)
-    if (is_object($user) && isset($user->meta)) {
-        $meta = maybe_unserialize($user->meta);
-        error_log("Got meta from \$user object");
-    } elseif (is_array($user) && isset($user['meta'])) {
-        $meta = maybe_unserialize($user['meta']);
-        error_log("Got meta from \$user array");
-    }
-    
-    // Metoda 2: Fallback - pobierz z tabeli signups
-    if (empty($meta)) {
-        $signup = $wpdb->get_row($wpdb->prepare("SELECT meta FROM {$wpdb->prefix}signups WHERE activation_key = %s", $key));
-        if ($signup && $signup->meta) {
-            $meta = maybe_unserialize($signup->meta);
-            error_log("Got meta from signups table");
-        }
-    }
-    
-    if (empty($meta)) {
-        error_log("No meta found for key: $key");
+
+    // 1. Pobierz metadane
+    $signup = $wpdb->get_row($wpdb->prepare("SELECT meta FROM {$wpdb->prefix}signups WHERE activation_key = %s", $key));
+    if (!$signup || !($meta = maybe_unserialize($signup->meta))) {
         return;
     }
-    
-    error_log("Meta keys: " . print_r(array_keys($meta), true));
-    error_log("Has temp_password_for_activation: " . (isset($meta['temp_password_for_activation']) ? 'YES' : 'NO'));
 
     // 2. Poprawka na hasło
     if (isset($meta['temp_password_for_activation']) && !empty($meta['temp_password_for_activation'])) {
-        error_log("Setting password for user $user_id");
         wp_set_password($meta['temp_password_for_activation'], $user_id);
-        error_log("Password set successfully");
-    } else {
-        error_log("No temp_password_for_activation found in meta!");
     }
 
     // 3. Ustaw pola profilu xProfile
@@ -3288,15 +2988,21 @@ function get_zodiac_sign($date_string)
 }
 
 
-// === STATIC BACKGROUND FOR PRAWDZIWAMILOSC.PL ===
-// Note: Removed GSAP libraries and animated background to prevent iOS/iPad auto-refresh issues
+// === KOMPLETNY KOD ANIMOWANEGO TŁA DLA PRAWDZIWAMILOSC.PL ===
 
-// CSS for static background gradient
-function custom_static_background_css()
+// 1. Dodaj GSAP i biblioteki
+function load_gsap_libraries()
+{
+    wp_enqueue_script('gsap', 'https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js', array(), '3.12.5', true);
+    wp_enqueue_script('gsap-scrolltrigger', 'https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js', array('gsap'), '3.12.5', true);
+}
+add_action('wp_enqueue_scripts', 'load_gsap_libraries');
+
+// 2. Dodaj CSS dla animowanego tła
+function custom_animated_background_css()
 {
     ?>
-    <style id="custom-static-background">
-        /* Static background gradient - no animations to prevent iOS/iPad refresh issues */
+    <style id="custom-dynamic-background">
         body {
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 25%, #1a1a2e 50%, #0f3460 75%, #1a1a2e 100%) !important;
             background-attachment: fixed;
@@ -3305,7 +3011,7 @@ function custom_static_background_css()
             overflow-x: hidden;
         }
 
-        /* Static gradient overlay layer */
+        /* Gradient layer - ruchomy */
         body::before {
             content: '';
             position: fixed;
@@ -3316,18 +3022,326 @@ function custom_static_background_css()
             background: radial-gradient(circle at 50% 50%, rgba(127, 83, 172, 0.3) 0%, rgba(100, 125, 238, 0.2) 35%, transparent 70%);
             pointer-events: none;
             z-index: -2;
+            will-change: background;
         }
 
-       
+        /* Główna animowana kula */
+        body::after {
+            content: '';
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            height: 300px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, rgba(188, 111, 241, 0.8), rgba(127, 83, 172, 0.6), rgba(100, 125, 238, 0.4));
+            filter: blur(40px);
+            opacity: 0.7;
+            animation: float 6s ease-in-out infinite, pulse 4s ease-in-out infinite alternate;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        @keyframes float {
+
+            0%,
+            100% {
+                transform: translate(-50%, -50%) translateY(0px) translateX(0px);
+            }
+
+            25% {
+                transform: translate(-50%, -50%) translateY(-30px) translateX(20px);
+            }
+
+            50% {
+                transform: translate(-50%, -50%) translateY(-15px) translateX(-20px);
+            }
+
+            75% {
+                transform: translate(-50%, -50%) translateY(-35px) translateX(10px);
+            }
+        }
+
+        @keyframes pulse {
+            0% {
+                opacity: 0.5;
+                filter: blur(40px);
+            }
+
+            100% {
+                opacity: 0.8;
+                filter: blur(60px);
+            }
+        }
+
+        /* Dodatkowe kule */
+        .orb-container-extra {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: -1;
+            overflow: hidden;
+        }
+
+        .orb-container-extra .orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(60px);
+            opacity: 0.4;
+            will-change: transform;
+        }
+
+        .orb-1 {
+            width: 250px;
+            height: 250px;
+            top: 20%;
+            left: 10%;
+            background: radial-gradient(circle, rgba(188, 111, 241, 0.6), transparent 70%);
+            animation: float-orb-1 12s ease-in-out infinite;
+        }
+
+        .orb-2 {
+            width: 200px;
+            height: 200px;
+            top: 60%;
+            right: 15%;
+            background: radial-gradient(circle, rgba(100, 125, 238, 0.5), transparent 70%);
+            animation: float-orb-2 15s ease-in-out infinite;
+        }
+
+        .orb-3 {
+            width: 180px;
+            height: 180px;
+            bottom: 20%;
+            left: 50%;
+            background: radial-gradient(circle, rgba(127, 83, 172, 0.4), transparent 70%);
+            animation: float-orb-3 18s ease-in-out infinite;
+        }
+
+        @keyframes float-orb-1 {
+
+            0%,
+            100% {
+                transform: translate(0, 0);
+            }
+
+            25% {
+                transform: translate(40px, -50px);
+            }
+
+            50% {
+                transform: translate(-30px, -80px);
+            }
+
+            75% {
+                transform: translate(50px, -40px);
+            }
+        }
+
+        @keyframes float-orb-2 {
+
+            0%,
+            100% {
+                transform: translate(0, 0);
+            }
+
+            33% {
+                transform: translate(-50px, 40px);
+            }
+
+            66% {
+                transform: translate(30px, -30px);
+            }
+        }
+
+        @keyframes float-orb-3 {
+
+            0%,
+            100% {
+                transform: translate(0, 0);
+            }
+
+            20% {
+                transform: translate(60px, -20px);
+            }
+
+            40% {
+                transform: translate(-40px, -60px);
+            }
+
+            60% {
+                transform: translate(20px, -40px);
+            }
+
+            80% {
+                transform: translate(-30px, -10px);
+            }
+        }
+
+        /* Responsywność */
+        @media (max-width: 768px) {
+            body::after {
+                width: 200px;
+                height: 200px;
+            }
+
+            .orb-1,
+            .orb-2,
+            .orb-3 {
+                width: 150px !important;
+                height: 150px !important;
+                filter: blur(40px);
+            }
+        }
     </style>
     <?php
 }
-add_action('wp_head', 'custom_static_background_css', 100);
+add_action('wp_head', 'custom_animated_background_css', 100);
 
-// Note: Animated background removed to prevent iOS/iPad auto-refresh issues
-// The continuous requestAnimationFrame loops, CSS variable updates, and event listeners
-// were causing Safari on iOS/iPad to reload the page every few minutes.
-// Static background gradient is now defined in custom_static_background_css() function above
+// 3. Dodaj HTML z dodatkowymi kulami i JavaScript dla animacji
+function custom_animated_background_html()
+{
+    ?>
+    <!-- Dodatkowe animowane kule -->
+    <div class="orb-container-extra">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
+
+    <script>
+        (function () {
+            'use strict';
+
+            // Czekaj na załadowanie DOM
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', init);
+            } else {
+                init();
+            }
+
+            function init() {
+                console.log('🎨 Inicjalizacja animowanego tła...');
+
+                // 1. Animacja gradientu (body::before)
+                let gradientAngle = 135;
+                const bodyElement = document.querySelector('body');
+
+                function animateGradient() {
+                    gradientAngle += 0.3;
+                    if (gradientAngle >= 360) gradientAngle = 0;
+
+                    const x = 50 + Math.cos(gradientAngle * Math.PI / 180) * 20;
+                    const y = 50 + Math.sin(gradientAngle * Math.PI / 180) * 20;
+
+                    // Aktualizuj pseudo-element ::before przez CSS variable
+                    bodyElement.style.setProperty('--gradient-x', x + '%');
+                    bodyElement.style.setProperty('--gradient-y', y + '%');
+
+                    requestAnimationFrame(animateGradient);
+                }
+
+                // Dodaj CSS variables
+                const style = document.createElement('style');
+                style.innerHTML = `
+                body::before {
+                    background: radial-gradient(
+                        circle at var(--gradient-x, 50%) var(--gradient-y, 50%), 
+                        rgba(127, 83, 172, 0.3) 0%, 
+                        rgba(100, 125, 238, 0.2) 35%, 
+                        transparent 70%
+                    ) !important;
+                    transition: background 0.5s ease;
+                }
+            `;
+                document.head.appendChild(style);
+
+                animateGradient();
+
+                // 2. Reakcja kul na ruch myszy
+                const orbs = document.querySelectorAll('.orb-container-extra .orb');
+
+                document.addEventListener('mousemove', function (e) {
+                    const mouseX = e.clientX / window.innerWidth;
+                    const mouseY = e.clientY / window.innerHeight;
+
+                    orbs.forEach((orb, index) => {
+                        const speed = (index + 1) * 15;
+                        const x = (mouseX - 0.5) * speed;
+                        const y = (mouseY - 0.5) * speed;
+
+                        orb.style.transition = 'transform 0.3s ease-out';
+                        orb.style.transform = 'translate(' + x + 'px, ' + y + 'px)';
+                    });
+                });
+
+                // 3. Zmiana kolorów na scroll (opcjonalne)
+                let ticking = false;
+
+                window.addEventListener('scroll', function () {
+                    if (!ticking) {
+                        window.requestAnimationFrame(function () {
+                            const scrollPercent = window.pageYOffset / (document.documentElement.scrollHeight - window.innerHeight);
+                            const hue = 260 + (scrollPercent * 30); // Od fioletu do niebieskiego
+
+                            // Subtelna zmiana odcienia
+                            orbs.forEach(function (orb) {
+                                orb.style.filter = 'blur(60px) hue-rotate(' + (scrollPercent * 30) + 'deg)';
+                            });
+
+                            ticking = false;
+                        });
+
+                        ticking = true;
+                    }
+                });
+
+                // 4. GSAP animacje (jeśli GSAP załadowany)
+                if (typeof gsap !== 'undefined') {
+                    console.log('✅ GSAP załadowany - dodaję zaawansowane animacje');
+
+                    // Parallax dla głównej kuli (body::after)
+                    gsap.to('body::after', {
+                        scrollTrigger: {
+                            trigger: 'body',
+                            start: 'top top',
+                            end: 'bottom top',
+                            scrub: 1
+                        },
+                        y: 100,
+                        scale: 0.8,
+                        opacity: 0.4
+                    });
+
+                    // Animacja dodatkowych kul podczas scrollu
+                    orbs.forEach(function (orb, index) {
+                        gsap.to(orb, {
+                            scrollTrigger: {
+                                trigger: 'body',
+                                start: 'top top',
+                                end: 'bottom top',
+                                scrub: 2
+                            },
+                            y: (index + 1) * -100,
+                            rotation: (index + 1) * 45,
+                            ease: 'none'
+                        });
+                    });
+                } else {
+                    console.log('⚠️ GSAP nie załadowany - podstawowe animacje CSS');
+                }
+
+                console.log('✅ Animowane tło uruchomione!');
+            }
+        })();
+    </script>
+    <?php
+}
+add_action('wp_footer', 'custom_animated_background_html', 1);
 
 // === DOSTOSOWANIE NAGŁÓWKA I STOPKI DO CIEMNEGO TŁA - WZMOCNIONE ===
 
@@ -3336,7 +3350,6 @@ function custom_header_footer_dark_style()
     ?>
     <style id="dark-header-footer">
         /* ===== NAGŁÓWEK (HEADER) - ULTRA PRIORITY ===== */
-        /* UWAGA: NIE UŻYWAJ backdrop-filter - powoduje auto-refresh na iOS/iPad */
 
         /* Wszystkie możliwe selektory nagłówka */
         header,
@@ -3355,6 +3368,7 @@ function custom_header_footer_dark_style()
             background-color: rgba(26, 26, 46, 0.95) !important;
             background-image: none !important;
             background: rgba(26, 26, 46, 0.95) !important;
+            backdrop-filter: blur(10px) !important;
             border-bottom: 1px solid rgba(188, 111, 241, 0.2) !important;
         }
 
@@ -3418,7 +3432,6 @@ function custom_header_footer_dark_style()
         }
 
         /* ===== STOPKA (FOOTER) - ULTRA PRIORITY ===== */
-        /* UWAGA: NIE UŻYWAJ backdrop-filter - powoduje auto-refresh na iOS/iPad */
 
         /* Wszystkie możliwe selektory stopki */
         footer,
@@ -3438,6 +3451,7 @@ function custom_header_footer_dark_style()
             background-color: rgba(22, 33, 62, 0.95) !important;
             background-image: none !important;
             background: rgba(22, 33, 62, 0.95) !important;
+            backdrop-filter: blur(10px) !important;
             border-top: 1px solid rgba(188, 111, 241, 0.2) !important;
             color: #ffffff !important;
         }
@@ -4986,6 +5000,8 @@ add_shortcode('moj_formularz_rejestracji', 'my_custom_registration_shortcode');
 // ---------------------------------------------------------
 // KONFIGURACJA (Uzupełnij swoje ID!)
 // ---------------------------------------------------------
+define('ONBOARDING_PAGE_ID', 1339); // <--- Zmień na ID strony "Uzupełnij Profil"
+
 // ID Pól w BuddyPress (xProfile) - sprawdź w panelu admina!
 define('FIELD_RELIGIA', 346);
 define('FIELD_POLITYKA', 351);
@@ -4993,59 +5009,41 @@ define('FIELD_PRACA', 356);
 define('FIELD_DIETA', 362);
 // ---------------------------------------------------------
 
-// Note: ONBOARDING_PAGE_ID is already defined at the top of this file (line 19)
-// This check is kept for backward compatibility with older code sections
-if ( ! defined( 'ONBOARDING_PAGE_ID' ) ) {
-    define( 'ONBOARDING_PAGE_ID', 1339 );
-}
-
-/**
- * Helper function: Check if current page is a BuddyPress page
- * 
- * @return bool True if on any BuddyPress page (user, activity, groups, messages)
- */
-function is_buddypress_page() {
-    $bp_checks = ['bp_is_user', 'bp_is_activity', 'bp_is_groups', 'bp_is_messages'];
-    
-    foreach ($bp_checks as $check_function) {
-        if (function_exists($check_function) && call_user_func($check_function)) {
-            return true;
-        }
-    }
-    
-    return false;
-}
-
+// 1. MECHANIZM BLOKADY (Redirect)
 function my_onboarding_gatekeeper()
 {
-    if (!is_user_logged_in() || current_user_can('manage_options')) {
-        return;
-    }
-
-    // Jeśli to dashboard lub strona główna - nie rób nic
-    if (is_dashboard_page()) {
-        return;
-    }
-    
-    // Nie przekierowuj z profili BuddyPress (bp_is_user, bp_is_activity, etc.)
-    if (is_buddypress_page()) {
+    // Działa tylko dla zalogowanych, którzy nie są adminami
+    if (!is_user_logged_in() || current_user_can('administrator')) {
         return;
     }
 
     $user_id = get_current_user_id();
+
+    // Sprawdzamy flagę "czy_zakonczono_onboarding"
     $is_completed = get_user_meta($user_id, 'app_onboarding_complete', true);
 
-    // Jeśli nie ukończono onboardingu -> przekieruj
-    if (!$is_completed) {
-        $target = get_permalink(ONBOARDING_PAGE_ID);
-        if ($target && $target !== home_url('/')) {
-            wp_redirect($target);
+    // Jeśli jesteśmy na stronie onboardingu -> pozwól (żeby nie było pętli)
+    if (is_page(ONBOARDING_PAGE_ID)) {
+        // Jeśli user już to zrobił, a wchodzi tu ręcznie -> wykop go na główną
+        if ($is_completed) {
+            wp_redirect(home_url());
             exit;
         }
+        return; // Jest OK, niech wypełnia
+    }
+
+    // Jeśli onboarding NIE jest skończony -> Przekieruj na stronę onboardingu
+    if (!$is_completed) {
+        wp_redirect(get_permalink(ONBOARDING_PAGE_ID));
+        exit;
     }
 }
-// Priorytet 20, aby upewnić się, że WP już wie, na jakiej stronie jesteśmy
-add_action('template_redirect', 'my_onboarding_gatekeeper', 20);
+add_action('template_redirect', 'my_onboarding_gatekeeper');
+
+
+
+
+add_shortcode('moj_onboarding_form', 'my_safe_onboarding_form');
 
 // POPRAWIONA FUNKCJA ONBOARDINGU
 function my_safe_onboarding_form()
@@ -5214,7 +5212,6 @@ function my_safe_onboarding_form()
     <?php
     return ob_get_clean();
 }
-add_shortcode('moj_onboarding_form', 'my_safe_onboarding_form');
 
 
 /* --- PODMIANA AVATARA NA ZDJĘCIE Z BIBLIOTEKI --- */
@@ -6058,720 +6055,63 @@ function zmiana_nazwy_zakladki_friends()
 }
 add_action('bp_actions', 'zmiana_nazwy_zakladki_friends');
 
-function pm_bm_ios_fullscreen_fix_mobile_wrap() {
+/**
+ * =========================================================================
+ * COMMUNITY FIX: Mobile Chat Input Visibility (CSS Override)
+ * =========================================================================
+ * Forces visibility of Better Messages input/footer on mobile devices.
+ * Addresses issue where keyboard/theme CSS hides the input bar.
+ */
+function add_mobile_chat_css_fix() {
     ?>
-    <style>
-    /* iOS Safari / mobile – poprawka wysokości wrappera Better Messages */
-    @supports (-webkit-touch-callout: none) {
-      /* główny wrapper chatu na mobile */
-      .bp-messages-wrap.mobile-ready.bp-messages-mobile {
-        height: calc(100vh - 85px) !important;
-        max-height: calc(100vh - 85px) !important;
-        display: flex !important;
-        flex-direction: column;
-        overflow: hidden;
-      }
+    <style id="community-mobile-chat-fix">
+        @media (max-width: 768px) {
+            /* 1. Force display, LIFT, and style chat footer */
+            .bm-footer,
+            .better-messages-input,
+            .bp-messages-reply-area,
+            .bp-messages-input {
+                display: flex !important;
+                flex-wrap: nowrap;
+                align-items: center;
+                visibility: visible !important;
+                opacity: 1 !important;
+                height: auto !important;
+                
+                /* LIFTING FIX */
+                position: fixed !important;
+                bottom: 150px !important; /* AGGRESSIVE LIFT */
+                padding-bottom: env(safe-area-inset-bottom) !important;
+                left: 0 !important;
+                right: 0 !important;
+                z-index: 99999 !important;
+                background: #ffffff !important;
+                border-top: 1px solid #ddd !important;
+            }
 
-      /* lista wiadomości wewnątrz */
-      .bp-messages-wrap.mobile-ready.bp-messages-mobile .bpbm-chat-main,
-      .bp-messages-wrap.mobile-ready.bp-messages-mobile .bpbm-messages-list-wrap {
-        flex: 1 1 auto;
-        min-height: 0;
-        overflow-y: auto;
-      }
+            /* 2. Fix textarea sizing */
+            .bm-textarea,
+            .bm-footer textarea,
+            .bp-messages-reply-area textarea {
+                display: block !important;
+                max-height: 120px;
+                min-height: 40px;
+            }
 
-      /* stopka z inputem */
-      .bp-messages-wrap.mobile-ready.bp-messages-mobile .bm-reply {
-        flex: 0 0 auto;
-        position: sticky;
-        bottom: 0;
-        padding-bottom: env(safe-area-inset-bottom, 8px);
-        background: inherit;
-      }
-    }
+            /* 3. Force send button visibility */
+            .bm-send,
+            .bm-footer button,
+            .bp-messages-reply-area button {
+                display: inline-flex !important;
+            }
+            
+            /* 4. Handle Fullscreen specific overrides if needed */
+            .bm-mobile-fullscreen .bm-footer {
+                bottom: 60px !important;
+            }
+        }
     </style>
-    
-    <script>
-    // Smart Polling & Optimistic Updates for Better Messages
-    (function() {
-        let pollingInterval = null;
-        let currentThreadId = null;
-        
-        // Start smart polling when chat is opened
-        function startSmartPolling() {
-            if (pollingInterval) return; // Already polling
-            
-            pollingInterval = setInterval(() => {
-                // Refresh messages for current thread
-                if (currentThreadId && typeof BetterMessages !== 'undefined') {
-                    console.log('[Smart Poll] Refreshing messages...');
-                    // Better Messages has a method to refresh current thread
-                    if (BetterMessages.functions && BetterMessages.functions.updateThread) {
-                        BetterMessages.functions.updateThread(currentThreadId);
-                    }
-                }
-            }, 10000); // Poll every 10 seconds
-        }
-        
-        // Stop polling when chat closed
-        function stopSmartPolling() {
-            if (pollingInterval) {
-                clearInterval(pollingInterval);
-                pollingInterval = null;
-                console.log('[Smart Poll] Stopped');
-            }
-        }
-        
-        // Initialize when document ready
-        document.addEventListener('DOMContentLoaded', function() {
-            // Detect when chat thread is opened
-            document.addEventListener('click', function(e) {
-                const threadLink = e.target.closest('.thread');
-                if (threadLink) {
-                    const threadId = threadLink.dataset.threadId || threadLink.getAttribute('data-thread-id');
-                    if (threadId) {
-                        currentThreadId = threadId;
-                        startSmartPolling();
-                    }
-                }
-            });
-            
-            // Optimistic Update - show message immediately
-            document.addEventListener('submit', function(e) {
-                if (e.target.closest('.bm-reply-form, .bp-messages-reply-form')) {
-                    const textarea = e.target.querySelector('textarea[name="message"]');
-                    const messageText = textarea ? textarea.value.trim() : '';
-                    
-                    if (messageText) {
-                        // Create optimistic message element
-                        const messagesList = document.querySelector('.bpbm-messages-list, .bp-messages-thread');
-                        if (messagesList) {
-                            const optimisticMsg = document.createElement('div');
-                            optimisticMsg.className = 'message bp-messages-item outgoing optimistic-message';
-                            optimisticMsg.innerHTML = `
-                                <div class="message-content">
-                                    <div class="message-text">${escapeHtml(messageText)}</div>
-                                    <div class="message-time">Wysyłanie...</div>
-                                </div>
-                            `;
-                            optimisticMsg.style.opacity = '0.7';
-                            messagesList.appendChild(optimisticMsg);
-                            messagesList.scrollTop = messagesList.scrollHeight;
-                            
-                            // Clear textarea immediately
-                            textarea.value = '';
-                            
-                            // Remove optimistic message after 2 seconds (will be replaced by real message from poll)
-                            setTimeout(() => {
-                                optimisticMsg.style.transition = 'opacity 0.3s';
-                                optimisticMsg.style.opacity = '1';
-                            }, 500);
-                        }
-                    }
-                }
-            });
-            
-            // Stop polling when user leaves messages page
-            const observer = new MutationObserver(() => {
-                if (!document.querySelector('.bp-messages-wrap')) {
-                    stopSmartPolling();
-                    currentThreadId = null;
-                }
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
-        });
-        
-        // Helper function to escape HTML
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-        
-        console.log('[Smart Polling] Initialized');
-    })();
-    </script>
     <?php
 }
-add_action( 'wp_head', 'pm_bm_ios_fullscreen_fix_mobile_wrap', 80 );
+add_action('wp_footer', 'add_mobile_chat_css_fix', 99999);
 
-// ============================================
-// CUSTOM REST API: High-Resolution Profile Photos
-// ============================================
-
-/**
- * Add high-resolution profile photo URL to BuddyPress Members REST API response
- * This extends the default member data with full-size profile photo from media library
- */
-add_filter('rest_prepare_buddypress_member', 'pm_add_hires_avatar_to_rest', 10, 3);
-
-function pm_add_hires_avatar_to_rest($response, $user, $request) {
-    $user_id = $user->ID;
-    
-    // Get the attachment ID from user meta
-    $attach_id = get_user_meta($user_id, 'user_avatar_id', true);
-    
-    if ($attach_id) {
-        // Get full size image URL
-        $image_url = wp_get_attachment_image_url($attach_id, 'full');
-        
-        // Also get large size as fallback (good balance between quality and file size)
-        $image_large_url = wp_get_attachment_image_url($attach_id, 'large');
-        
-        // Add to response
-        $response->data['hires_avatar'] = array(
-            'full' => $image_url ? $image_url : '',
-            'large' => $image_large_url ? $image_large_url : '',
-            'attachment_id' => $attach_id
-        );
-    } else {
-        // No custom avatar, return empty
-        $response->data['hires_avatar'] = array(
-            'full' => '',
-            'large' => '',
-            'attachment_id' => 0
-        );
-    }
-    
-    return $response;
-}
-
-// ============================================
-// CUSTOM REST API: Matches Endpoint
-// ============================================
-
-/**
- * Register REST API endpoint for getting matched users (mutual likes)
- */
-add_action('rest_api_init', function () {
-    register_rest_route('sk/v1', '/matches', [
-        'methods' => 'GET',
-        'callback' => 'sk_get_matches_endpoint',
-        'permission_callback' => function() {
-            return is_user_logged_in();
-        }
-    ]);
-});
-
-/**
- * Get matched users for the current user
- * A match occurs when two users have mutually liked each other
- */
-function sk_get_matches_endpoint($request) {
-    $current_user_id = get_current_user_id();
-    
-    if (!$current_user_id) {
-        return new WP_Error('not_logged_in', 'User must be logged in', ['status' => 401]);
-    }
-    
-    // Get users I liked and users who liked me
-    $my_likes = get_user_meta($current_user_id, 'sk_user_likes', true) ?: [];
-    $liked_me = get_user_meta($current_user_id, 'sk_liked_by_users', true) ?: [];
-    
-    // Find mutual likes (matches)
-    $match_ids = array_intersect($my_likes, $liked_me);
-    
-    $results = [];
-    
-    foreach ($match_ids as $user_id) {
-        $user_data = get_userdata($user_id);
-        if (!$user_data) {
-            continue;
-        }
-        
-        // Get high-res avatar from media library
-        $attach_id = get_user_meta($user_id, 'user_avatar_id', true);
-        $avatar_url = '';
-        if ($attach_id) {
-            $avatar_url = wp_get_attachment_image_url($attach_id, 'large') ?: 
-                         wp_get_attachment_image_url($attach_id, 'full');
-        }
-        // Fallback to BuddyPress avatar
-        if (!$avatar_url) {
-            $avatar_url = bp_core_get_avatar(array(
-                'item_id' => $user_id,
-                'type' => 'full',
-                'html' => false
-            ));
-        }
-        
-        // Get last active time
-        $last_active = bp_get_user_last_activity($user_id);
-        
-        $results[] = [
-            'id' => $user_id,
-            'name' => $user_data->display_name,
-            'mention_name' => $user_data->user_nicename,
-            'avatar_urls' => [
-                'full' => $avatar_url
-            ],
-            'hires_avatar' => [
-                'large' => $attach_id ? wp_get_attachment_image_url($attach_id, 'large') : '',
-                'full' => $attach_id ? wp_get_attachment_image_url($attach_id, 'full') : '',
-            ],
-            'last_activity' => $last_active,
-        ];
-    }
-    
-    return rest_ensure_response($results);
-}
-
-// ========================================
-// Custom Like/Unlike Endpoint
-// ========================================
-add_action('rest_api_init', function () {
-    register_rest_route('sk/v1', '/like', [
-        'methods' => 'POST',
-        'callback' => 'sk_toggle_like_endpoint',
-        'permission_callback' => function() {
-            return is_user_logged_in();
-        }
-    ]);
-});
-
-/**
- * Toggle like/unlike for a user
- */
-function sk_toggle_like_endpoint($request) {
-    $liker_id = get_current_user_id();
-    $liked_id = intval($request->get_param('user_id'));
-    
-    error_log("sk_toggle_like_endpoint: liker=$liker_id, liked=$liked_id");
-    
-    if (!$liker_id) {
-        return new WP_Error('not_logged_in', 'User must be logged in', ['status' => 401]);
-    }
-    
-    if (!$liked_id || $liker_id == $liked_id) {
-        return new WP_Error('invalid_user_id', 'Invalid user ID', ['status' => 400]);
-    }
-    
-    // Get current likes - ensure all values are integers
-    $my_likes = get_user_meta($liker_id, 'sk_user_likes', true) ?: [];
-    if (!is_array($my_likes)) $my_likes = [];
-    $my_likes = array_map('intval', $my_likes);
-    
-    $liked_by = get_user_meta($liked_id, 'sk_liked_by_users', true) ?: [];
-    if (!is_array($liked_by)) $liked_by = [];
-    $liked_by = array_map('intval', $liked_by);
-    
-    // Check if second user already liked me
-    $liker_liked_by_list = get_user_meta($liker_id, 'sk_liked_by_users', true) ?: [];
-    if (!is_array($liker_liked_by_list)) $liker_liked_by_list = [];
-    $liker_liked_by_list = array_map('intval', $liker_liked_by_list);
-    
-    $is_mutual_match_possible = in_array($liked_id, $liker_liked_by_list, true);
-    $is_already_liked = in_array($liked_id, $my_likes, true);
-    
-    error_log("my_likes: " . json_encode($my_likes));
-    error_log("liked_by: " . json_encode($liked_by));
-    error_log("liker_liked_by_list: " . json_encode($liker_liked_by_list));
-    error_log("is_mutual_match_possible: " . ($is_mutual_match_possible ? 'YES' : 'NO'));
-    error_log("is_already_liked: " . ($is_already_liked ? 'YES' : 'NO'));
-    
-    if ($is_already_liked) {
-        // UNLIKE
-        $my_likes = array_diff($my_likes, [$liked_id]);
-        $liked_by = array_diff($liked_by, [$liker_id]);
-        
-        // Remove friendship in BuddyPress
-        if (function_exists('friends_remove_friend')) {
-            friends_remove_friend($liker_id, $liked_id);
-        }
-        
-        $new_status = 'unliked';
-    } else {
-        // LIKE
-        $my_likes[] = $liked_id;
-        $liked_by[] = $liker_id;
-        
-        // Check if it's a MATCH (mutual like)
-        if ($is_mutual_match_possible) {
-            if (function_exists('friends_add_friend')) {
-                // Auto-accept friendship
-                friends_add_friend($liker_id, $liked_id, true);
-            }
-        }
-        
-        $new_status = 'liked';
-    }
-    
-    // Save updated meta
-    update_user_meta($liker_id, 'sk_user_likes', array_values($my_likes));
-    update_user_meta($liked_id, 'sk_liked_by_users', array_values($liked_by));
-    
-    // Clear cache
-    delete_transient('users_grid_cache_' . $liker_id);
-    delete_transient('users_grid_cache_' . $liked_id);
-    
-    return rest_ensure_response([
-        'status' => $new_status,
-        'is_match' => $is_mutual_match_possible && $new_status === 'liked'
-    ]);
-}
-
-// ========================================
-// Custom Registration Endpoint
-// ========================================
-add_action('rest_api_init', function () {
-    register_rest_route('sk/v1', '/register', [
-        'methods' => 'POST',
-        'callback' => 'sk_register_user',
-        'permission_callback' => '__return_true', // Public endpoint
-    ]);
-});
-
-function sk_register_user($request) {
-    $username = sanitize_user($request->get_param('user_login'));
-    $email = sanitize_email($request->get_param('user_email'));
-    $password = $request->get_param('password');
-    
-    // Walidacja
-    if (empty($username) || empty($email) || empty($password)) {
-        return new WP_Error('missing_fields', 'Wszystkie pola są wymagane', ['status' => 400]);
-    }
-    
-    if (!is_email($email)) {
-        return new WP_Error('invalid_email', 'Nieprawidłowy adres email', ['status' => 400]);
-    }
-    
-    if (username_exists($username)) {
-        return new WP_Error('username_exists', 'Nazwa użytkownika już istnieje', ['status' => 400]);
-    }
-    
-    if (email_exists($email)) {
-        return new WP_Error('email_exists', 'Email już jest zarejestrowany', ['status' => 400]);
-    }
-    
-    if (strlen($password) < 6) {
-        return new WP_Error('weak_password', 'Hasło musi mieć minimum 6 znaków', ['status' => 400]);
-    }
-    
-    // Użyj BuddyPress signup z email verification
-    $signup_id = bp_core_signup_user(
-        $username,
-        $password,
-        $email,
-        ['field_1' => ''] // Puste meta - można później rozszerzyć
-    );
-    
-    if (is_wp_error($signup_id)) {
-        return new WP_Error('registration_failed', $signup_id->get_error_message(), ['status' => 500]);
-    }
-    
-    // Email z linkiem aktywacyjnym został wysłany przez BuddyPress
-    return rest_ensure_response([
-        'success' => true,
-        'message' => 'Konto zostało utworzone. Sprawdź email aby aktywować konto.',
-        'username' => $username,
-        'email' => $email,
-        'requires_activation' => true,
-    ]);
-}
-
-
-
-// ============================================================================
-// ENDPOINT AKTYWACJI KONTA
-// ============================================================================
-
-add_action('rest_api_init', 'register_user_activation_endpoint');
-function register_user_activation_endpoint() {
-    register_rest_route('sk/v1', '/activate', [
-        'methods' => 'GET',
-        'callback' => 'sk_activate_user',
-        'permission_callback' => '__return_true',
-    ]);
-}
-
-function sk_activate_user($request) {
-    $activation_key = sanitize_text_field($request->get_param('key'));
-    $user_login = sanitize_user($request->get_param('user'));
-    
-    if (empty($activation_key) || empty($user_login)) {
-        return new WP_Error('missing_params', 'Brak klucza aktywacyjnego lub nazwy użytkownika', ['status' => 400]);
-    }
-    
-    $activate = bp_core_activate_signup($activation_key);
-    
-    if (is_wp_error($activate)) {
-        return new WP_Error('activation_failed', $activate->get_error_message(), ['status' => 400]);
-    }
-    
-    return rest_ensure_response([
-        'success' => true,
-        'message' => 'Konto zostało aktywowane pomyślnie!',
-        'user_id' => $activate['user_id'],
-        'username' => $activate['user_login'],
-    ]);
-}
-
-
-// ============================================================================
-// REJESTRACJA Z AVATAREM - CUSTOM ENDPOINT
-// ============================================================================
-
-add_action('rest_api_init', function () {
-    register_rest_route('sk/v1', '/register-with-avatar', [
-        'methods' => 'POST',
-        'callback' => 'sk_register_user_with_avatar',
-        'permission_callback' => '__return_true',
-    ]);
-});
-
-function sk_register_user_with_avatar($request) {
-    $username = sanitize_user($request->get_param('user_login'));
-    $email = sanitize_email($request->get_param('user_email'));
-    $password = $request->get_param('password');
-    
-    // Walidacja
-    if (empty($username) || empty($email) || empty($password)) {
-        return new WP_Error('missing_fields', 'Wszystkie pola są wymagane', ['status' => 400]);
-    }
-    
-    if (!is_email($email)) {
-        return new WP_Error('invalid_email', 'Nieprawidłowy adres email', ['status' => 400]);
-    }
-    
-    if (username_exists($username)) {
-        return new WP_Error('username_exists', 'Nazwa użytkownika już istnieje', ['status' => 400]);
-    }
-    
-    if (email_exists($email)) {
-        return new WP_Error('email_exists', 'Email już jest zarejestrowany', ['status' => 400]);
-    }
-    
-    if (strlen($password) < 6) {
-        return new WP_Error('weak_password', 'Hasło musi mieć minimum 6 znaków', ['status' => 400]);
-    }
-    
-    // Sprawdź czy jest avatar
-    $files = $request->get_file_params();
-    $has_avatar = !empty($files['avatar']) && $files['avatar']['error'] === UPLOAD_ERR_OK;
-    
-    // Zarejestruj przez BuddyPress signup
-    $signup_id = bp_core_signup_user(
-        $username,
-        $password,
-        $email,
-        [
-            'field_1' => $username,
-            'temp_password_for_activation' => $password // Zapisz czyste hasło do późniejszego ustawienia
-        ]
-    );
-    
-    if (is_wp_error($signup_id)) {
-        return new WP_Error('registration_failed', $signup_id->get_error_message(), ['status' => 500]);
-    }
-    
-    // Dodatkowo zaktualizuj meta z hasłem
-    global $wpdb;
-    $signup_row = $wpdb->get_row($wpdb->prepare(
-        "SELECT id, meta FROM {$wpdb->prefix}signups WHERE user_login = %s",
-        $username
-    ));
-    
-    if ($signup_row) {
-        $meta = maybe_unserialize($signup_row->meta);
-        if (!is_array($meta)) {
-            $meta = [];
-        }
-        $meta['temp_password_for_activation'] = $password;
-        
-        $wpdb->update(
-            $wpdb->prefix . 'signups',
-            ['meta' => maybe_serialize($meta)],
-            ['id' => $signup_row->id]
-        );
-    }
-    
-    // Jeśli jest avatar, zapisz go tymczasowo z activation key
-    if ($has_avatar) {
-        global $wpdb;
-        $signup = $wpdb->get_row($wpdb->prepare(
-            "SELECT activation_key FROM {$wpdb->prefix}signups WHERE user_login = %s",
-            $username
-        ));
-        
-        if ($signup && $signup->activation_key) {
-            $upload_dir = wp_upload_dir();
-            $temp_dir = $upload_dir['basedir'] . '/temp-avatars/';
-            
-            if (!file_exists($temp_dir)) {
-                wp_mkdir_p($temp_dir);
-            }
-            
-            $ext = pathinfo($files['avatar']['name'], PATHINFO_EXTENSION);
-            $temp_file = $temp_dir . $signup->activation_key . '.' . $ext;
-            
-            move_uploaded_file($files['avatar']['tmp_name'], $temp_file);
-        }
-    }
-    
-    return rest_ensure_response([
-        'success' => true,
-        'message' => 'Konto zostało utworzone. Sprawdź email aby aktywować konto.',
-        'username' => $username,
-        'email' => $email,
-        'requires_activation' => true,
-    ]);
-}
-
-// Hook do ustawienia avatara po aktywacji
-add_action('bp_core_activated_user', 'sk_set_avatar_after_activation', 10, 3);
-function sk_set_avatar_after_activation($user_id, $key, $user) {
-    error_log("sk_set_avatar_after_activation called for user_id: $user_id, key: $key");
-    
-    $upload_dir = wp_upload_dir();
-    $temp_dir = $upload_dir['basedir'] . '/temp-avatars/';
-    
-    // Szukaj pliku z tym activation key
-    $files = glob($temp_dir . $key . '.*');
-    error_log("Looking for avatar files: " . print_r($files, true));
-    
-    if (!empty($files)) {
-        $temp_file = $files[0];
-        error_log("Found temp file: $temp_file");
-        
-        // Ustaw jako avatar BuddyPress
-        $avatar_dir = bp_core_avatar_upload_path() . '/avatars/' . $user_id . '/';
-        wp_mkdir_p($avatar_dir);
-        error_log("Avatar dir: $avatar_dir");
-        
-        // Standardowe nazwy plików BuddyPress
-        $ext = pathinfo($temp_file, PATHINFO_EXTENSION);
-        $avatar_full = $avatar_dir . $user_id . '-bpfull.' . $ext;
-        $avatar_thumb = $avatar_dir . $user_id . '-bpthumb.' . $ext;
-        
-        error_log("Avatar full path: $avatar_full");
-        error_log("Avatar thumb path: $avatar_thumb");
-        
-        // Stwórz miniatury
-        $image = wp_get_image_editor($temp_file);
-        if (!is_wp_error($image)) {
-            // Full size (150x150)
-            $image->resize(150, 150, true);
-            $image->save($avatar_full);
-            error_log("Saved full avatar");
-            
-            // Thumb size (50x50)
-            $image = wp_get_image_editor($temp_file);
-            $image->resize(50, 50, true);
-            $image->save($avatar_thumb);
-            error_log("Saved thumb avatar");
-        } else {
-            error_log("Image editor error: " . $image->get_error_message());
-        }
-        
-        // Usuń plik tymczasowy
-        unlink($temp_file);
-        error_log("Deleted temp file");
-    } else {
-        error_log("No avatar file found for key: $key");
-    }
-}
-
-// ============================================================================
-// MOBILE DEEP LINKING DLA STRONY AKTYWACJI
-// ============================================================================
-
-add_action('wp_footer', 'sk_mobile_activation_redirect');
-function sk_mobile_activation_redirect() {
-    // Sprawdź czy jesteśmy na stronie aktywacji BuddyPress
-    if (!isset($_GET['key']) || strpos($_SERVER['REQUEST_URI'], 'activate') === false) {
-        return;
-    }
-    
-    $activation_key = sanitize_text_field($_GET['key']);
-    ?>
-    <script>
-    (function() {
-        // Wykryj czy jest mobile
-        var isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        
-        if (isMobile && '<?php echo esc_js($activation_key); ?>') {
-            var appUrl = 'prawdziwamilosc://activate?key=<?php echo esc_js($activation_key); ?>';
-            
-            // Próbuj otworzyć aplikację
-            var iframe = document.createElement('iframe');
-            iframe.style.display = 'none';
-            iframe.src = appUrl;
-            document.body.appendChild(iframe);
-            
-            // Alternatywnie użyj window.location
-            setTimeout(function() {
-                window.location.href = appUrl;
-            }, 100);
-            
-            // Fallback - jeśli aplikacja nie otworzy się w ciągu 2 sekund,
-            // pozwól użytkownikowi aktywować przez web
-            setTimeout(function() {
-                document.body.removeChild(iframe);
-            }, 2000);
-        }
-    })();
-    </script>
-    <?php
-}
-
-// ========================================
-// Custom Send Message Endpoint (via Better Messages / BuddyPress)
-// ========================================
-add_action('rest_api_init', function () {
-    register_rest_route('sk/v1', '/send-message', [
-        'methods' => 'POST',
-        'callback' => 'sk_send_message_endpoint',
-        'permission_callback' => function() {
-            return is_user_logged_in();
-        }
-    ]);
-});
-
-/**
- * Send a message to a user (creates new thread or replies to existing)
- */
-function sk_send_message_endpoint($request) {
-    $sender_id = get_current_user_id();
-    $recipient_id = intval($request->get_param('recipient_id'));
-    $message = sanitize_textarea_field($request->get_param('message'));
-    $subject = sanitize_text_field($request->get_param('subject')) ?: 'Nowa wiadomość';
-    
-    error_log("sk_send_message_endpoint: sender=$sender_id, recipient=$recipient_id, message=$message");
-    
-    if (!$sender_id) {
-        return new WP_Error('not_logged_in', 'User must be logged in', ['status' => 401]);
-    }
-    
-    if (!$recipient_id) {
-        return new WP_Error('invalid_recipient', 'Recipient ID is required', ['status' => 400]);
-    }
-    
-    if (empty($message)) {
-        return new WP_Error('empty_message', 'Message cannot be empty', ['status' => 400]);
-    }
-    
-    // Use BuddyPress messages_new_message - this works with Better Messages plugin
-    if (function_exists('messages_new_message')) {
-        $thread_id = messages_new_message([
-            'sender_id' => $sender_id,
-            'recipients' => [$recipient_id],
-            'subject' => $subject,
-            'content' => $message,
-        ]);
-        
-        if (!$thread_id) {
-            error_log("messages_new_message failed for sender=$sender_id, recipient=$recipient_id");
-            return new WP_Error('send_failed', 'Failed to send message', ['status' => 500]);
-        }
-        
-        error_log("Message sent successfully, thread_id: $thread_id");
-        
-        return rest_ensure_response([
-            'success' => true,
-            'thread_id' => $thread_id,
-            'message' => 'Message sent successfully'
-        ]);
-    }
-    
-    return new WP_Error('no_messaging_system', 'BuddyPress messaging not available', ['status' => 500]);
-}
