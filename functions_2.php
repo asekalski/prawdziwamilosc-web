@@ -5022,9 +5022,20 @@ function my_onboarding_gatekeeper()
         return;
     }
 
-    // Jeśli to dashboard lub strona główna - nie rób nic
-    if (is_dashboard_page()) {
+    // Jeśli jesteśmy JUŻ na stronie onboardingu - nie przekierowuj (unikamy pętli)
+    $current_id = get_queried_object_id();
+    if ($current_id === ONBOARDING_PAGE_ID) {
         return;
+    }
+    
+    // Sprawdź też po URL path dla pewności
+    if (isset($_SERVER['REQUEST_URI'])) {
+        $path = trim(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH), '/');
+        $onboarding_page = get_post(ONBOARDING_PAGE_ID);
+        $onboarding_slug = $onboarding_page ? $onboarding_page->post_name : 'onboarding';
+        if ($path === 'onboarding' || $path === $onboarding_slug) {
+            return;
+        }
     }
     
     // Nie przekierowuj z profili BuddyPress (bp_is_user, bp_is_activity, etc.)
