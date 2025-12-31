@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scroll Indicator Added</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <style>
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      min-height: 100vh;
+      overflow: hidden !important;
+      background: #0b0c1e;
+      font-family: "Montserrat", "Georgia", serif;
+    }
+
+    /* Dodatkowe wymuszenie dla WordPressa */
+    body {
+      overflow: hidden !important;
+      height: 100vh;
+      position: fixed;
+      width: 100%;
+    }
+
+    /* TŁA */
+    #bgContainer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 1;
+    }
+
+    .bg-slide {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      visibility: hidden;
+    }
+
+    .bg-slide:first-child {
+      visibility: visible;
+    }
+
+    .bg-image {
+      position: absolute;
+      width: 100vw;
+      height: 120vh;
+      top: -10vh;
+      left: 0;
+      background-size: cover;
+      background-position: center;
+      will-change: transform;
+    }
+
+    /* PRZYCISKI NAWIGACYJNE */
+    .nav-buttons {
+      position: fixed;
+      top: 30px;
+      right: 40px;
+      z-index: 100;
+      display: flex;
+      gap: 15px;
+      pointer-events: auto;
+    }
+
+    .nav-btn {
+      font-family: "Montserrat", sans-serif;
+      font-size: 0.95rem;
+      font-weight: 600;
+      padding: 12px 28px;
+      border-radius: 25px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-decoration: none;
+      display: inline-block;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    }
+
+    .btn-join {
+      background: linear-gradient(135deg, #ff6b9d 0%, #c471ed 100%);
+      color: #fff;
+    }
+
+    .btn-join:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(255, 107, 157, 0.4);
+    }
+
+    .btn-login {
+      background: rgba(255, 255, 255, 0.15);
+      color: #fff;
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .btn-login:hover {
+      background: rgba(255, 255, 255, 0.25);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(255, 255, 255, 0.2);
+    }
+
+    /* TEKSTY */
+    #textContainer {
+      position: absolute;
+      top: -60px;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .text-slide {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      visibility: hidden;
+    }
+
+    .text-slide:first-child {
+      visibility: visible;
+    }
+
+    .banner {
+      font-size: 3rem;
+      font-weight: 900;
+      letter-spacing: 0.06em;
+      text-shadow: 0 6px 28px #1a143abb;
+      background: rgba(16, 13, 30, 0.6);
+      padding: 48px 72px;
+      border-radius: 28px;
+      box-shadow: 0 7px 55px 9px rgba(20, 10, 40, 0.32);
+      color: #fff;
+      text-align: center;
+      will-change: transform, opacity;
+    }
+
+    /* SCROLL INDICATOR */
+    .scroll-icon {
+      position: absolute;
+      bottom: 25px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 30px;
+      height: 50px;
+      border: 2px solid rgba(255, 255, 255, 1);
+      border-radius: 20px;
+      z-index: 10;
+      opacity: 0.8;
+      pointer-events: none;
+    }
+
+    .scroll-wheel {
+      width: 4px;
+      height: 8px;
+      background: #fff;
+      border-radius: 2px;
+      position: absolute;
+      top: 8px;
+      opacity: 1;
+      left: 50%;
+      transform: translateX(-50%);
+      animation: scrollMove 1.5s infinite;
+    }
+
+    @keyframes scrollMove {
+      0% {
+        transform: translate(-50%, 0);
+        opacity: 1;
+      }
+
+      100% {
+        transform: translate(-50%, 15px);
+        opacity: 0;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .banner {
+        font-size: 1.6rem;
+        padding: 28px 10vw;
+      }
+
+      .nav-buttons {
+        top: 20px;
+        right: 20px;
+        gap: 10px;
+      }
+
+      .nav-btn {
+        font-size: 0.85rem;
+        padding: 10px 20px;
+      }
+    }
+
+    /* PARALLAX LAYERS */
+    .layer {
+      position: absolute;
+      top: -10vh;
+      left: 0;
+      width: 100vw;
+      height: 120vh;
+      background-size: cover;
+      background-position: center;
+      will-change: transform;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- PRZYCISKI NAWIGACYJNE -->
+  <div class="nav-buttons">
+    <a href="https://prawdziwamilosc.pl/Zarejestruj-mnie" class="nav-btn btn-join">Dołącz za free</a>
+    <a href="https://prawdziwamilosc.pl/logowanie" class="nav-btn btn-login">Zaloguj</a>
+  </div>
+
+  <div id="bgContainer">
+    <!-- SLIDE 1: PARALLAX -->
+    <div class="bg-slide">
+      <div class="layer layer-1" style="background-image:url('https://prawdziwamilosc.pl/layer-1.png'); z-index:1;">
+      </div>
+      <div class="layer layer-2" style="background-image:url('https://prawdziwamilosc.pl/layer-2.png'); z-index:2;">
+      </div>
+      <div class="layer layer-3" style="background-image:url('https://prawdziwamilosc.pl/layer-3.png'); z-index:3;">
+      </div>
+    </div>
+
+    <!-- SLIDE 2, 3, 4: STANDARD IMAGES -->
+    <div class="bg-slide">
+      <div class="bg-image"
+        style="background-image:url('https://prawdziwamilosc.pl/wp-content/uploads/2025/11/venus2-scaled.webp')"></div>
+    </div>
+    <div class="bg-slide">
+      <div class="bg-image"
+        style="background-image:url('https://prawdziwamilosc.pl/wp-content/uploads/2025/11/love4-scaled.webp')"></div>
+    </div>
+    <div class="bg-slide">
+      <div class="bg-image"
+        style="background-image:url('https://prawdziwamilosc.pl/wp-content/uploads/2025/11/love5-scaled.webp')"></div>
+    </div>
+  </div>
+
+  <div id="textContainer">
+    <div class="text-slide">
+      <div class="banner">Prawdziwa Miłość</div>
+    </div>
+    <div class="text-slide">
+      <div class="banner">Zaczyna się od właściwej Intencji</div>
+    </div>
+    <div class="text-slide">
+      <div class="banner">Dołącz do ludzi otwartych na Prawdziwą Miłość</div>
+    </div>
+    <div class="text-slide">
+      <div class="banner">Znajdź Relację, o której Marzysz. </div>
+    </div>
+
+    <!-- Scroll Indicator (wspólny dla wszystkich slajdów) -->
+    <div class="scroll-icon">
+      <div class="scroll-wheel"></div>
+    </div>
+  </div>
+
+  <script>
+    // WYMUSZENIE WYŁĄCZENIA SCROLLOWANIA DLA WORDPRESSA
+    (function forceDisableScroll() {
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+      document.body.style.position = 'fixed';
+      document.body.style.width = '100%';
+      document.body.style.height = '100vh';
+    })();
+
+    const bgSlides = document.querySelectorAll('.bg-slide');
+    const textSlides = document.querySelectorAll('.text-slide');
+    const numSections = bgSlides.length;
+    const scrollIcon = document.querySelector('.scroll-icon');
+
+    let current = 0;
+    let isAnimating = false;
+
+    bgSlides.forEach((slide, i) => { slide.style.zIndex = i + 1; });
+
+    function goToSection(idx, dir) {
+      if (isAnimating || idx === current || idx < 0 || idx >= numSections) return;
+      isAnimating = true;
+
+      if (idx === numSections - 1) {
+        gsap.to(scrollIcon, { opacity: 0, duration: 0.5 });
+      } else {
+        gsap.to(scrollIcon, { opacity: 0.8, duration: 0.5 });
+      }
+
+      const fromBgSlide = bgSlides[current];
+      const toBgSlide = bgSlides[idx];
+
+      const fromTextSlide = textSlides[current];
+      const toTextSlide = textSlides[idx];
+      const fromBanner = fromTextSlide.querySelector('.banner');
+      const toBanner = toTextSlide.querySelector('.banner');
+
+      const dist = window.innerHeight * 0.8;
+
+      const bgDuration = 1.5;
+      const textInDuration = 1.8;
+      const textOutDuration = 1.5;
+
+      gsap.set(toBgSlide, { visibility: 'visible' });
+      gsap.set(fromBgSlide, { visibility: 'visible' });
+      gsap.set(toTextSlide, { visibility: 'visible' });
+      gsap.set(fromTextSlide, { visibility: 'visible' });
+
+      const tl = gsap.timeline({
+        onComplete: () => {
+          isAnimating = false;
+          current = idx;
+          bgSlides.forEach((s, i) => { if (i !== current) gsap.set(s, { visibility: 'hidden' }) });
+          textSlides.forEach((s, i) => { if (i !== current) gsap.set(s, { visibility: 'hidden' }) });
+        }
+      });
+
+      // Helper to animate slide content elements
+      const fromBgImg = fromBgSlide.querySelector('.bg-image');
+      const toBgImg = toBgSlide.querySelector('.bg-image');
+      const fromLayers = fromBgSlide.querySelectorAll('.layer');
+      const toLayers = toBgSlide.querySelectorAll('.layer');
+
+      // --- SCROLL W DÓŁ (NEXT) --- TAPE EFFECT
+      if (dir > 0) {
+        // Both slides move together like a tape
+        gsap.set(toBgSlide, { zIndex: 10, y: '-100%' });
+        gsap.set(fromBgSlide, { zIndex: 1, y: '0%' });
+
+        // Reset entering slide layers
+        if (toLayers.length > 0) {
+          gsap.set(toLayers, { y: '0%' });
+        }
+
+        // Handle entering slide image
+        if (toBgImg) {
+          gsap.set(toBgImg, { y: '0%' });
+        }
+
+        // Animate BOTH containers with SAME easing - true tape effect
+        tl.to(toBgSlide, { y: '0%', duration: bgDuration, ease: 'power3.inOut' }, 0);
+        tl.to(fromBgSlide, { y: '100%', duration: bgDuration, ease: 'power3.inOut' }, 0);
+
+        // PARALLAX for exiting slide (first slide with layers)
+        if (fromLayers.length > 0) {
+          const fl1 = fromBgSlide.querySelector('.layer-1');
+          const fl2 = fromBgSlide.querySelector('.layer-2');
+          const fl3 = fromBgSlide.querySelector('.layer-3');
+
+          // Layer 1: stays synced with container (background)
+          gsap.set(fl1, { y: '0%' });
+
+          // Layer 2 & 3: move slower than container (creates parallax)
+          // Negative offset = layer appears to move slower as container exits
+          gsap.set([fl2, fl3], { y: '0%' });
+          tl.to(fl2, { y: '-25%', duration: bgDuration, ease: 'power3.inOut' }, 0);
+          tl.to(fl3, { y: '-45%', duration: bgDuration, ease: 'power3.inOut' }, 0);
+        }
+
+        // Handle exiting slide image
+        if (fromBgImg) {
+          tl.to(fromBgImg, { y: '0%', duration: bgDuration, ease: 'power3.inOut' }, 0);
+        }
+
+        tl.fromTo(fromBanner,
+          { y: 0, opacity: 1 },
+          { y: -dist, opacity: 0, duration: textOutDuration, ease: 'power2.in' }, 0
+        );
+
+        tl.fromTo(toBanner,
+          { y: dist, opacity: 0 },
+          { y: 0, opacity: 1, duration: textInDuration, ease: 'power3.out' }, 0.1
+        );
+      }
+
+      // --- SCROLL W GÓRĘ (PREV) --- TAPE EFFECT
+      else {
+        // Both slides move together like a tape
+        gsap.set(toBgSlide, { zIndex: 10, y: '100%' });
+        gsap.set(fromBgSlide, { zIndex: 1, y: '0%' });
+
+        // Handle entering slide image
+        if (toBgImg) {
+          gsap.set(toBgImg, { y: '0%' });
+        }
+
+        // Animate BOTH containers with SAME easing - true tape effect
+        tl.to(toBgSlide, { y: '0%', duration: bgDuration, ease: 'power3.inOut' }, 0);
+        tl.to(fromBgSlide, { y: '-100%', duration: bgDuration, ease: 'power3.inOut' }, 0);
+
+        // PARALLAX for entering slide (first slide with layers)
+        if (toLayers.length > 0) {
+          const tl1 = toBgSlide.querySelector('.layer-1');
+          const tl2 = toBgSlide.querySelector('.layer-2');
+          const tl3 = toBgSlide.querySelector('.layer-3');
+
+          // Layer 1: stays synced with container (background)
+          gsap.set(tl1, { y: '0%' });
+
+          // Layer 2 & 3: start offset, animate to 0% (creates parallax)
+          gsap.set(tl2, { y: '25%' });
+          gsap.set(tl3, { y: '45%' });
+          tl.to(tl2, { y: '0%', duration: bgDuration, ease: 'power3.inOut' }, 0);
+          tl.to(tl3, { y: '0%', duration: bgDuration, ease: 'power3.inOut' }, 0);
+        } else {
+          // Reset layers for non-parallax slides
+          if (toLayers.length > 0) {
+            gsap.set(toLayers, { y: '0%' });
+          }
+        }
+
+        // Reset exiting slide layers
+        if (fromLayers.length > 0) {
+          gsap.set(fromLayers, { y: '0%' });
+        }
+
+        // Handle exiting slide image
+        if (fromBgImg) {
+          tl.to(fromBgImg, { y: '0%', duration: bgDuration, ease: 'power3.inOut' }, 0);
+        }
+
+        tl.fromTo(fromBanner,
+          { y: 0, opacity: 1 },
+          { y: dist, opacity: 0, duration: textOutDuration, ease: 'power2.in' }, 0
+        );
+
+        tl.fromTo(toBanner,
+          { y: -dist, opacity: 0 },
+          { y: 0, opacity: 1, duration: textInDuration, ease: 'power3.out' }, 0.1
+        );
+      }
+    }
+
+    // --- EVENTY ---
+    window.addEventListener('wheel', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isAnimating) return;
+      const dir = e.deltaY > 50 ? 1 : e.deltaY < -50 ? -1 : 0;
+      if (dir === 1 && current < numSections - 1) { goToSection(current + 1, 1); }
+      if (dir === -1 && current > 0) { goToSection(current - 1, -1); }
+    }, { passive: false, capture: true });
+
+    window.addEventListener('keydown', e => {
+      if (isAnimating) return;
+      if ((e.key === 'ArrowDown' || e.key === 'PageDown') && current < numSections - 1) {
+        goToSection(current + 1, 1); e.preventDefault();
+      }
+      if ((e.key === 'ArrowUp' || e.key === 'PageUp') && current > 0) {
+        goToSection(current - 1, -1); e.preventDefault();
+      }
+    });
+
+    let touchStartY = null;
+    window.addEventListener('touchstart', e => {
+      if (e.touches.length) touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+    window.addEventListener('touchend', () => { touchStartY = null; }, { passive: true });
+
+    window.addEventListener('touchmove', e => {
+      if (isAnimating || touchStartY === null) return;
+      const dY = e.touches[0].clientY - touchStartY;
+      if (dY < -40 && current < numSections - 1) {
+        goToSection(current + 1, 1);
+        touchStartY = null;
+        e.preventDefault();
+      }
+      if (dY > 40 && current > 0) {
+        goToSection(current - 1, -1);
+        touchStartY = null;
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    document.addEventListener('scroll', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }, { passive: false, capture: true });
+
+    document.addEventListener('touchmove', function (e) {
+      if (!e.target.closest('.nav-buttons')) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    // Init
+    (function animateEntryFirst() {
+      const firstSlide = bgSlides[0];
+      const layers = firstSlide.querySelectorAll('.layer');
+      const firstBanner = textSlides[0].querySelector('.banner');
+      const dist = window.innerHeight * 0.8;
+
+      if (layers.length > 0) {
+        // Staggered entry - SLIDE FROM BOTTOM (single smooth phase)
+        const l1 = firstSlide.querySelector('.layer-1');
+        const l2 = firstSlide.querySelector('.layer-2');
+        const l3 = firstSlide.querySelector('.layer-3');
+
+        // All layers start COMPLETELY below viewport (100% = fully off-screen)
+        // All visible from start - no opacity changes needed
+        gsap.set(l1, { y: '100%' });
+        gsap.set(l2, { y: '100%' });
+        gsap.set(l3, { y: '100%' });
+
+        // SLIDE UP with staggered delays - single smooth motion
+        gsap.to(l1, { y: '0%', duration: 1.8, ease: 'power4.out' });
+        gsap.to(l2, { y: '0%', duration: 2.2, delay: 0.5, ease: 'power4.out' });
+        gsap.to(l3, { y: '0%', duration: 2.5, delay: 1.0, ease: 'power4.out' });
+      } else {
+        const img = firstSlide.querySelector('.bg-image');
+        if (img) {
+          gsap.set(img, { scale: 1.1 });
+          gsap.to(img, { scale: 1, duration: 1.8, ease: 'power2.out' });
+        }
+      }
+
+      gsap.fromTo(firstBanner,
+        { opacity: 0, y: dist },
+        { opacity: 1, y: 0, duration: 2.0, delay: 0.2, ease: 'power3.out' }
+      );
+    })();
+
+    window.addEventListener('mousemove', e => {
+      if (isAnimating) return;
+
+      const slide = bgSlides[current];
+      const banner = textSlides[current].querySelector('.banner');
+      const x = (e.clientX / window.innerWidth) - 0.5;
+      const y = (e.clientY / window.innerHeight) - 0.5;
+
+      // PARALLAX LOGIC
+      const layers = slide.querySelectorAll('.layer');
+
+      if (layers.length > 0) {
+        const layer1 = slide.querySelector('.layer-1');
+        const layer2 = slide.querySelector('.layer-2');
+        const layer3 = slide.querySelector('.layer-3');
+
+        // Heavy premium feel
+        if (layer1) gsap.to(layer1, { x: x * 80, y: y * 40, duration: 2, ease: 'power2.out', overwrite: 'auto' });
+        if (layer2) gsap.to(layer2, { x: x * 40, y: y * 20, duration: 2, ease: 'power2.out', overwrite: 'auto' });
+        if (layer3) gsap.to(layer3, { x: x * 15, y: y * 8, duration: 2, ease: 'power2.out', overwrite: 'auto' });
+
+      } else {
+        const bgImg = slide.querySelector('.bg-image');
+        if (bgImg) gsap.to(bgImg, { x: x * 15, duration: 1, overwrite: 'auto' });
+      }
+
+      gsap.to(banner, { x: x * 30, duration: 0.5, overwrite: 'auto' });
+    });
+
+    window.addEventListener('mouseleave', () => {
+      const slide = bgSlides[current];
+      const banner = textSlides[current].querySelector('.banner');
+
+      const layers = slide.querySelectorAll('.layer');
+      if (layers.length > 0) {
+        gsap.to(layers, { x: 0, y: 0, duration: 1.5, ease: 'power2.out' });
+      } else {
+        const bgImg = slide.querySelector('.bg-image');
+        if (bgImg) gsap.to(bgImg, { x: 0, duration: 1 });
+      }
+
+      gsap.to(banner, { x: 0, duration: 1 });
+    });
+  </script>
+</body>
+
+</html>
