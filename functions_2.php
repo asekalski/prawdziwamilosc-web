@@ -6237,6 +6237,151 @@ function pm_bm_ios_fullscreen_fix_mobile_wrap() {
 add_action( 'wp_head', 'pm_bm_ios_fullscreen_fix_mobile_wrap', 80 );
 
 // ============================================
+// MOBILE BOTTOM NAVIGATION BAR
+// ============================================
+
+/**
+ * Render mobile bottom navigation bar for logged-in users
+ * Only visible on devices < 768px
+ */
+function pm_mobile_bottom_nav() {
+    if (!is_user_logged_in()) {
+        return;
+    }
+    
+    $user_domain = function_exists('bp_loggedin_user_domain') ? bp_loggedin_user_domain() : home_url('/');
+    $messages_slug = function_exists('bp_get_messages_slug') ? bp_get_messages_slug() : 'messages';
+    $unread_count = function_exists('messages_get_unread_count') ? messages_get_unread_count() : 0;
+    
+    // Get current URL for active state detection
+    $current_url = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
+    
+    // Determine active item
+    $is_dashboard = (strpos($current_url, '/dashboard') !== false || strpos($current_url, '/members-grid') !== false);
+    $is_matches = (strpos($current_url, '/dopasowania') !== false || strpos($current_url, '/friends') !== false);
+    $is_messages = (strpos($current_url, '/bp-messages') !== false || strpos($current_url, '/' . $messages_slug) !== false);
+    $is_profile = (!$is_dashboard && !$is_matches && !$is_messages && strpos($current_url, '/members/') !== false);
+    ?>
+    
+    <nav class="pm-bottom-nav" id="pm-mobile-nav">
+        <a href="<?php echo home_url('/dashboard'); ?>" class="pm-nav-item <?php echo $is_dashboard ? 'active' : ''; ?>">
+            <svg class="pm-nav-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+            </svg>
+            <span class="pm-nav-label">Odkryj</span>
+        </a>
+        
+        <a href="<?php echo $user_domain . 'dopasowania/'; ?>" class="pm-nav-item <?php echo $is_matches ? 'active' : ''; ?>">
+            <svg class="pm-nav-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+            </svg>
+            <span class="pm-nav-label">Pary</span>
+        </a>
+        
+        <a href="<?php echo $user_domain . $messages_slug . '/'; ?>" class="pm-nav-item <?php echo $is_messages ? 'active' : ''; ?>">
+            <svg class="pm-nav-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
+            </svg>
+            <span class="pm-nav-label">Wiadomości</span>
+            <?php if ($unread_count > 0): ?>
+                <span class="pm-nav-badge" id="pm-nav-badge-messages"><?php echo $unread_count > 9 ? '9+' : $unread_count; ?></span>
+            <?php endif; ?>
+        </a>
+        
+        <a href="<?php echo $user_domain; ?>" class="pm-nav-item <?php echo $is_profile ? 'active' : ''; ?>">
+            <svg class="pm-nav-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+            </svg>
+            <span class="pm-nav-label">Profil</span>
+        </a>
+    </nav>
+    
+    <style>
+    /* Mobile Bottom Navigation - only visible on mobile */
+    .pm-bottom-nav {
+        display: none;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 60px;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border-top: 1px solid rgba(255,255,255,0.1);
+        z-index: 9999;
+        padding-bottom: env(safe-area-inset-bottom, 0);
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.3);
+    }
+    
+    @media (max-width: 767px) {
+        .pm-bottom-nav {
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+        }
+        
+        /* Add padding to body so content doesn't hide behind nav */
+        body.logged-in {
+            padding-bottom: calc(60px + env(safe-area-inset-bottom, 0)) !important;
+        }
+        
+        /* Better Messages fullscreen fix - account for bottom nav */
+        .bp-messages-wrap.mobile-ready.bp-messages-mobile {
+            height: calc(100vh - 145px) !important;
+            max-height: calc(100vh - 145px) !important;
+        }
+    }
+    
+    .pm-nav-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        color: rgba(255,255,255,0.6);
+        padding: 8px 16px;
+        position: relative;
+        transition: color 0.2s ease;
+    }
+    
+    .pm-nav-item:hover,
+    .pm-nav-item.active {
+        color: #ff6b9d;
+    }
+    
+    .pm-nav-icon {
+        width: 24px;
+        height: 24px;
+        margin-bottom: 2px;
+    }
+    
+    .pm-nav-label {
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.3px;
+    }
+    
+    .pm-nav-badge {
+        position: absolute;
+        top: 2px;
+        right: 8px;
+        background: #ff4757;
+        color: white;
+        font-size: 10px;
+        font-weight: bold;
+        min-width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 4px;
+    }
+    </style>
+    <?php
+}
+add_action('wp_footer', 'pm_mobile_bottom_nav', 100);
+
+// ============================================
 // CUSTOM REST API: High-Resolution Profile Photos
 // ============================================
 
