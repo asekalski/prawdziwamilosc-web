@@ -504,29 +504,34 @@
       }
     }, { passive: false });
 
-    // Init
-    (function animateEntryFirst() {
+    // Init - wait for images to load for consistent animation
+    window.addEventListener('load', function animateEntryFirst() {
       const firstSlide = bgSlides[0];
       const layers = firstSlide.querySelectorAll('.layer');
       const firstBanner = textSlides[0].querySelector('.banner');
       const dist = window.innerHeight * 0.8;
 
       if (layers.length > 0) {
-        // Staggered entry - SLIDE FROM BOTTOM (single smooth phase)
         const l1 = firstSlide.querySelector('.layer-1');
         const l2 = firstSlide.querySelector('.layer-2');
         const l3 = firstSlide.querySelector('.layer-3');
 
-        // All layers start COMPLETELY below viewport (100% = fully off-screen)
-        // All visible from start - no opacity changes needed
+        // All layers start below viewport
         gsap.set(l1, { y: '100%' });
         gsap.set(l2, { y: '100%' });
         gsap.set(l3, { y: '100%' });
 
-        // SLIDE UP with staggered delays - single smooth motion
-        gsap.to(l1, { y: '0%', duration: 1.8, ease: 'power4.out' });
-        gsap.to(l2, { y: '0%', duration: 2.2, delay: 0.5, ease: 'power4.out' });
-        gsap.to(l3, { y: '0%', duration: 2.5, delay: 1.0, ease: 'power4.out' });
+        // Use timeline for guaranteed sequential animation
+        const entryTl = gsap.timeline();
+
+        // All layers start together but have DIFFERENT SPEEDS
+        // Layer 1 (background) - fastest, arrives first
+        entryTl.to(l1, { y: '0%', duration: 1.0, ease: 'power3.out' }, 0);
+        // Layer 2 - medium speed
+        entryTl.to(l2, { y: '0%', duration: 2.0, ease: 'power3.out' }, 0);
+        // Layer 3 (foreground) - slowest, arrives last
+        entryTl.to(l3, { y: '0%', duration: 3.0, ease: 'power3.out' }, 0);
+
       } else {
         const img = firstSlide.querySelector('.bg-image');
         if (img) {
@@ -539,7 +544,7 @@
         { opacity: 0, y: dist },
         { opacity: 1, y: 0, duration: 2.0, delay: 0.2, ease: 'power3.out' }
       );
-    })();
+    });
 
     window.addEventListener('mousemove', e => {
       if (isAnimating) return;
