@@ -6258,7 +6258,7 @@ function pm_mobile_bottom_nav() {
     
     // Determine active item
     $is_dashboard = (strpos($current_url, '/dashboard') !== false || strpos($current_url, '/members-grid') !== false);
-    $is_matches = (strpos($current_url, '/dopasowania') !== false || strpos($current_url, '/friends') !== false);
+    $is_matches = (strpos($current_url, '/matche') !== false || strpos($current_url, '/friends') !== false);
     $is_messages = (strpos($current_url, '/bp-messages') !== false || strpos($current_url, '/' . $messages_slug) !== false);
     $is_profile = (!$is_dashboard && !$is_matches && !$is_messages && strpos($current_url, '/members/') !== false);
     ?>
@@ -6271,7 +6271,7 @@ function pm_mobile_bottom_nav() {
             <span class="pm-nav-label">Odkryj</span>
         </a>
         
-        <a href="<?php echo $user_domain . 'dopasowania/'; ?>" class="pm-nav-item <?php echo $is_matches ? 'active' : ''; ?>">
+        <a href="<?php echo $user_domain . 'matche/'; ?>" class="pm-nav-item <?php echo $is_matches ? 'active' : ''; ?>">
             <svg class="pm-nav-icon" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
             </svg>
