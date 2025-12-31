@@ -5058,6 +5058,36 @@ function my_onboarding_gatekeeper()
 // Priorytet 20, aby upewnić się, że WP już wie, na jakiej stronie jesteśmy
 add_action('template_redirect', 'my_onboarding_gatekeeper', 20);
 
+/**
+ * Redirect non-logged-in users to login when accessing BuddyPress pages
+ * This handles the case when someone clicks a messages link from email while logged out
+ */
+function pm_buddypress_login_redirect() {
+    // Only for non-logged-in users
+    if (is_user_logged_in()) {
+        return;
+    }
+    
+    // Check if this is a BuddyPress members page
+    if (!isset($_SERVER['REQUEST_URI'])) {
+        return;
+    }
+    
+    $path = $_SERVER['REQUEST_URI'];
+    
+    // Check if URL contains /members/ (BuddyPress member pages including messages)
+    if (strpos($path, '/members/') !== false) {
+        // Build the redirect URL with the current page as redirect_to parameter
+        $current_url = home_url($path);
+        $login_url = wp_login_url($current_url);
+        
+        wp_redirect($login_url);
+        exit;
+    }
+}
+// Priority 5 - run early, before BuddyPress returns 404
+add_action('template_redirect', 'pm_buddypress_login_redirect', 5);
+
 // POPRAWIONA FUNKCJA ONBOARDINGU
 function my_safe_onboarding_form()
 {
