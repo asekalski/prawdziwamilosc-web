@@ -408,24 +408,21 @@
         tl.to(fromBgSlide, { y: '-100%', duration: bgDuration, ease: 'power3.inOut' }, 0);
 
         // PARALLAX for entering slide (first slide with layers)
+        // Match initial load animation - layers start below, different speeds
         if (toLayers.length > 0) {
           const tl1 = toBgSlide.querySelector('.layer-1');
           const tl2 = toBgSlide.querySelector('.layer-2');
           const tl3 = toBgSlide.querySelector('.layer-3');
 
-          // Layer 1: stays synced with container (background)
-          gsap.set(tl1, { y: '0%' });
+          // All layers start below viewport (like initial load)
+          gsap.set(tl1, { y: '100%' });
+          gsap.set(tl2, { y: '100%' });
+          gsap.set(tl3, { y: '100%' });
 
-          // Layer 2 & 3: start offset, animate to 0% (creates parallax)
-          gsap.set(tl2, { y: '25%' });
-          gsap.set(tl3, { y: '45%' });
-          tl.to(tl2, { y: '0%', duration: bgDuration, ease: 'power3.inOut' }, 0);
-          tl.to(tl3, { y: '0%', duration: bgDuration, ease: 'power3.inOut' }, 0);
-        } else {
-          // Reset layers for non-parallax slides
-          if (toLayers.length > 0) {
-            gsap.set(toLayers, { y: '0%' });
-          }
+          // Same speeds as initial load: 1.0s, 2.0s, 3.0s
+          tl.to(tl1, { y: '0%', duration: 1.0, ease: 'power3.out' }, 0);
+          tl.to(tl2, { y: '0%', duration: 2.0, ease: 'power3.out' }, 0);
+          tl.to(tl3, { y: '0%', duration: 3.0, ease: 'power3.out' }, 0);
         }
 
         // Reset exiting slide layers
