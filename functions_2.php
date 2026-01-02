@@ -5194,8 +5194,36 @@ function my_safe_onboarding_form()
             <!-- 3. AVATAR -->
             <div style="margin-bottom:15px;">
                 <label><strong>Zdjęcie profilowe (wymagane)</strong></label><br>
-                <input type="file" name="avatar" accept="image/*" required>
+                <div id="avatar-preview-container" style="margin: 10px 0; display: none;">
+                    <img id="avatar-preview" src="" alt="Podgląd zdjęcia" style="max-width: 200px; max-height: 200px; border-radius: 50%; object-fit: cover; border: 3px solid #e91e63; box-shadow: 0 4px 15px rgba(233,30,99,0.3);">
+                </div>
+                <label for="avatar-input" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #e91e63 0%, #9c27b0 100%); color: white; border-radius: 25px; cursor: pointer; font-weight: 500; transition: transform 0.2s, box-shadow 0.2s;">
+                    <span id="avatar-btn-text">📷 Wybierz zdjęcie</span>
+                </label>
+                <input type="file" name="avatar" id="avatar-input" accept="image/*" required style="display: none;">
+                <p id="avatar-filename" style="margin-top: 8px; color: #666; font-size: 13px;"></p>
             </div>
+            
+            <script>
+            document.getElementById('avatar-input').addEventListener('change', function(e) {
+                var file = e.target.files[0];
+                if (file) {
+                    var reader = new FileReader();
+                    reader.onload = function(event) {
+                        var preview = document.getElementById('avatar-preview');
+                        var container = document.getElementById('avatar-preview-container');
+                        var btnText = document.getElementById('avatar-btn-text');
+                        var filename = document.getElementById('avatar-filename');
+                        
+                        preview.src = event.target.result;
+                        container.style.display = 'block';
+                        btnText.textContent = '📷 Zmień zdjęcie';
+                        filename.textContent = '✓ ' + file.name;
+                    }
+                    reader.readAsDataURL(file);
+                }
+            });
+            </script>
 
             <!-- 4. RELIGIA -->
             <div style="margin-bottom:15px;">
@@ -6475,6 +6503,148 @@ function sk_get_matches_endpoint($request) {
         // Fallback to BuddyPress avatar
         if (!$avatar_url) {
             $avatar_url = bp_core_get_avatar(array(
+                'item_id' => $user_id,
+                'type' => 'full',
+                'html' => false
+            ));
+        }
+        
+        // Get last active time
+        $last_active = bp_get_user_last_activity($user_id);
+        
+        $results[] = [
+            'id' => $user_id,
+            'name' => $user_data->display_name,
+            'mention_name' => $user_data->user_nicename,
+            'avatar_urls' => [
+                'full' => $avatar_url
+            ],
+            'hires_avatar' => [
+                'large' => $attach_id ? wp_get_attachment_image_url($attach_id, 'large') : '',
+                'full' => $attach_id ? wp_get_attachment_image_url($attach_id, 'full') : '',
+            ],
+            'last_activity' => $last_active,
+        ];
+    }
+    
+    return rest_ensure_response($results);
+}
+
+// ========================================
+// Get Users I Liked Endpoint
+// ========================================
+add_action('rest_api_init', function () {
+    register_rest_route('sk/v1', '/liked', [
+        'methods' => 'GET',
+        'callback' => 'sk_get_liked_users_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+});
+
+/**
+ * Get users that the current user has liked
+ */
+function sk_get_liked_users_endpoint($request) {
+    $current_user_id = get_current_user_id();
+    
+    if (!$current_user_id) {
+        return new WP_Error('not_logged_in', 'User must be logged in', ['status' => 401]);
+    }
+    
+    // Get users I liked
+    $my_likes = get_user_meta($current_user_id, 'sk_user_likes', true) ?: [];
+    
+    $results = [];
+    
+    foreach ($my_likes as $user_id) {
+        $user_data = get_userdata($user_id);
+        if (!$user_data) {
+            continue;
+        }
+        
+        // Get high-res avatar from media library
+        $attach_id = get_user_meta($user_id, 'user_avatar_id', true);
+        $avatar_url = '';
+        if ($attach_id) {
+            $avatar_url = wp_get_attachment_image_url($attach_id, 'large') ?: 
+                         wp_get_attachment_image_url($attach_id, 'full');
+        }
+        // Fallback to BuddyPress avatar
+        if (!$avatar_url) {
+            $avatar_url = bp_core_fetch_avatar(array(
+                'item_id' => $user_id,
+                'type' => 'full',
+                'html' => false
+            ));
+        }
+        
+        // Get last active time
+        $last_active = bp_get_user_last_activity($user_id);
+        
+        $results[] = [
+            'id' => $user_id,
+            'name' => $user_data->display_name,
+            'mention_name' => $user_data->user_nicename,
+            'avatar_urls' => [
+                'full' => $avatar_url
+            ],
+            'hires_avatar' => [
+                'large' => $attach_id ? wp_get_attachment_image_url($attach_id, 'large') : '',
+                'full' => $attach_id ? wp_get_attachment_image_url($attach_id, 'full') : '',
+            ],
+            'last_activity' => $last_active,
+        ];
+    }
+    
+    return rest_ensure_response($results);
+}
+
+// ========================================
+// Get Users Who Liked Me Endpoint
+// ========================================
+add_action('rest_api_init', function () {
+    register_rest_route('sk/v1', '/likes-me', [
+        'methods' => 'GET',
+        'callback' => 'sk_get_likes_me_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+});
+
+/**
+ * Get users who have liked the current user
+ */
+function sk_get_likes_me_endpoint($request) {
+    $current_user_id = get_current_user_id();
+    
+    if (!$current_user_id) {
+        return new WP_Error('not_logged_in', 'User must be logged in', ['status' => 401]);
+    }
+    
+    // Get users who liked me
+    $liked_me = get_user_meta($current_user_id, 'sk_liked_by_users', true) ?: [];
+    
+    $results = [];
+    
+    foreach ($liked_me as $user_id) {
+        $user_data = get_userdata($user_id);
+        if (!$user_data) {
+            continue;
+        }
+        
+        // Get high-res avatar from media library
+        $attach_id = get_user_meta($user_id, 'user_avatar_id', true);
+        $avatar_url = '';
+        if ($attach_id) {
+            $avatar_url = wp_get_attachment_image_url($attach_id, 'large') ?: 
+                         wp_get_attachment_image_url($attach_id, 'full');
+        }
+        // Fallback to BuddyPress avatar
+        if (!$avatar_url) {
+            $avatar_url = bp_core_fetch_avatar(array(
                 'item_id' => $user_id,
                 'type' => 'full',
                 'html' => false
