@@ -29,6 +29,20 @@ if ( ! defined( 'REGISTRATION_PAGE_ID' ) ) {
     define( 'REGISTRATION_PAGE_ID', 1254 );
 }
 
+// BuddyPress Avatar Size - increase default resolution from 150x150 to 500x500
+if ( ! defined( 'BP_AVATAR_FULL_WIDTH' ) ) {
+    define( 'BP_AVATAR_FULL_WIDTH', 500 );
+}
+if ( ! defined( 'BP_AVATAR_FULL_HEIGHT' ) ) {
+    define( 'BP_AVATAR_FULL_HEIGHT', 500 );
+}
+if ( ! defined( 'BP_AVATAR_THUMB_WIDTH' ) ) {
+    define( 'BP_AVATAR_THUMB_WIDTH', 150 );
+}
+if ( ! defined( 'BP_AVATAR_THUMB_HEIGHT' ) ) {
+    define( 'BP_AVATAR_THUMB_HEIGHT', 150 );
+}
+
 
 /**
  * Super-stabilna funkcja sprawdzania Dashboardu
