@@ -2564,7 +2564,37 @@ function sk_toggle_like_user_ajax()
     delete_transient('users_grid_cache_' . $liker_id);
     delete_transient('users_grid_cache_' . $liked_id);
 
-    wp_send_json_success(['status' => $new_status]);
+    // Determine if this is a match
+    $is_match = $is_mutual_match_possible && $new_status === 'liked';
+    
+    // Build response
+    $response_data = [
+        'status' => $new_status,
+        'is_match' => $is_match
+    ];
+    
+    // If it's a match, include matched user info for the animation
+    if ($is_match) {
+        $matched_user = get_userdata($liked_id);
+        if ($matched_user) {
+            $avatar_id = get_user_meta($liked_id, 'sk_custom_avatar_id', true);
+            $avatar_url = '';
+            if ($avatar_id) {
+                $avatar_url = wp_get_attachment_image_url($avatar_id, 'medium');
+            }
+            if (!$avatar_url) {
+                $avatar_url = get_avatar_url($liked_id, ['size' => 200]);
+            }
+            
+            $response_data['matched_user'] = [
+                'id' => $liked_id,
+                'name' => $matched_user->display_name,
+                'avatar' => $avatar_url
+            ];
+        }
+    }
+    
+    wp_send_json_success($response_data);
 }
 // Upewnij się, że hook jest podpięty (usuń poprzedni jeśli dublujesz kod)
 remove_action('wp_ajax_toggle_like_user', 'sk_toggle_like_user_ajax');
@@ -2890,9 +2920,72 @@ function sk_global_like_button_script()
     if (!is_user_logged_in()) {
         return;
     }
+    
+    // Get current user avatar
+    $current_user_id = get_current_user_id();
+    $avatar_id = get_user_meta($current_user_id, 'sk_custom_avatar_id', true);
+    $current_user_avatar = '';
+    if ($avatar_id) {
+        $current_user_avatar = wp_get_attachment_image_url($avatar_id, 'medium');
+    }
+    if (!$current_user_avatar) {
+        $current_user_avatar = get_avatar_url($current_user_id, ['size' => 200]);
+    }
     ?>
+    <!-- Match Animation Modal -->
+    <div id="sk-match-modal" class="sk-match-modal" style="display:none;">
+        <div class="sk-match-overlay"></div>
+        <div class="sk-match-content">
+            <div class="sk-match-avatars">
+                <img id="sk-match-user-avatar" src="<?php echo esc_url($current_user_avatar); ?>" alt="Ty" class="sk-match-avatar sk-match-avatar-me">
+                <div class="sk-match-heart">
+                    <svg viewBox="0 0 24 24" width="50" height="50" fill="#FF6B9D">
+                        <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                    </svg>
+                </div>
+                <img id="sk-match-matched-avatar" src="" alt="" class="sk-match-avatar sk-match-avatar-matched">
+            </div>
+            <h2 class="sk-match-title">🎉 Macie Match! 🎉</h2>
+            <p id="sk-match-subtitle" class="sk-match-subtitle">Ty i <span id="sk-match-name"></span> wzajemnie się polubiliście!</p>
+            <div class="sk-match-buttons">
+                <a id="sk-match-message-btn" href="#" class="sk-match-btn sk-match-btn-primary">
+                    <span>💬</span> Wyślij wiadomość
+                </a>
+                <button id="sk-match-close-btn" class="sk-match-btn sk-match-btn-secondary">
+                    Kontynuuj przeglądanie
+                </button>
+            </div>
+        </div>
+    </div>
+    
     <script id="global-like-button-handler">
         jQuery(document).ready(function ($) {
+            // Match modal functions
+            function showMatchModal(matchedUser) {
+                var modal = $('#sk-match-modal');
+                $('#sk-match-matched-avatar').attr('src', matchedUser.avatar);
+                $('#sk-match-name').text(matchedUser.name);
+                $('#sk-match-message-btn').attr('href', '<?php echo bp_loggedin_user_domain() ?: home_url('/'); ?>messages/compose/?r=' + matchedUser.id);
+                
+                modal.fadeIn(300);
+                modal.find('.sk-match-content').addClass('sk-match-animate-in');
+                
+                // Auto-close after 4 seconds
+                setTimeout(function() {
+                    closeMatchModal();
+                }, 4000);
+            }
+            
+            function closeMatchModal() {
+                var modal = $('#sk-match-modal');
+                modal.find('.sk-match-content').removeClass('sk-match-animate-in');
+                modal.fadeOut(200);
+            }
+            
+            // Close modal on button click or overlay click
+            $('#sk-match-close-btn').on('click', closeMatchModal);
+            $('.sk-match-overlay').on('click', closeMatchModal);
+            
             // Używamy delegacji zdarzeń, aby działało na elementach dodanych dynamicznie
             $('body').on('click', '.like-button', function (e) {
                 e.preventDefault();
@@ -2918,6 +3011,11 @@ function sk_global_like_button_script()
                             if (buttonText.length) {
                                 buttonText.text('Lubisz to!');
                             }
+                            
+                            // Check if it's a match!
+                            if (response.data.is_match && response.data.matched_user) {
+                                showMatchModal(response.data.matched_user);
+                            }
                         } else {
                             button.removeClass('liked');
                             heartIcon.text('🤍');
@@ -2938,6 +3036,148 @@ function sk_global_like_button_script()
             });
         });
     </script>
+    
+    <style id="sk-match-modal-styles">
+        /* Match Modal Styles */
+        .sk-match-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 999999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .sk-match-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, rgba(139, 69, 139, 0.95) 0%, rgba(255, 107, 157, 0.95) 100%);
+        }
+        .sk-match-content {
+            position: relative;
+            z-index: 1;
+            text-align: center;
+            padding: 40px;
+            opacity: 0;
+            transform: scale(0.5);
+            transition: all 0.3s ease-out;
+        }
+        .sk-match-content.sk-match-animate-in {
+            opacity: 1;
+            transform: scale(1);
+        }
+        .sk-match-avatars {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            margin-bottom: 30px;
+        }
+        .sk-match-avatar {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: 4px solid #fff;
+            object-fit: cover;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+        }
+        .sk-match-heart {
+            background: #fff;
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 15px;
+            animation: sk-heart-pulse 0.6s ease-in-out infinite;
+            box-shadow: 0 4px 15px rgba(255, 107, 157, 0.5);
+        }
+        @keyframes sk-heart-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.15); }
+        }
+        .sk-match-title {
+            font-size: 36px;
+            font-weight: bold;
+            color: #fff;
+            margin: 0 0 15px 0;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+        .sk-match-subtitle {
+            font-size: 18px;
+            color: rgba(255,255,255,0.9);
+            margin: 0 0 35px 0;
+        }
+        .sk-match-buttons {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+        .sk-match-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 15px 40px;
+            border-radius: 30px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            border: none;
+        }
+        .sk-match-btn-primary {
+            background: #FF6B9D;
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(255, 107, 157, 0.5);
+        }
+        .sk-match-btn-primary:hover {
+            background: #ff5189;
+            transform: translateY(-2px);
+            color: #fff;
+        }
+        .sk-match-btn-secondary {
+            background: transparent;
+            color: rgba(255,255,255,0.8);
+        }
+        .sk-match-btn-secondary:hover {
+            color: #fff;
+        }
+        
+        @media (max-width: 480px) {
+            .sk-match-avatar {
+                width: 90px;
+                height: 90px;
+            }
+            .sk-match-heart {
+                width: 55px;
+                height: 55px;
+                margin: 0 10px;
+            }
+            .sk-match-heart svg {
+                width: 35px;
+                height: 35px;
+            }
+            .sk-match-title {
+                font-size: 28px;
+            }
+            .sk-match-subtitle {
+                font-size: 16px;
+            }
+            .sk-match-btn {
+                padding: 12px 30px;
+                font-size: 16px;
+            }
+        }
+    </style>
     <?php
 }
 
