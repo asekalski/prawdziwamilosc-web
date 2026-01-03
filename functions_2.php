@@ -7145,3 +7145,353 @@ function sk_send_message_endpoint($request) {
     
     return new WP_Error('no_messaging_system', 'BuddyPress messaging not available', ['status' => 500]);
 }
+
+/**
+ * Mobile Member Tabs Navigation
+ * Adds horizontal tab bar for Members page on mobile (similar to mobile app)
+ * Tabs: Wyszukaj (Search), Polubieni (Liked), Lubią Mnie (Likes Me), Matche (Matches)
+ */
+function pm_mobile_member_tabs() {
+    // Only show on members directory or dashboard
+    $current_url = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
+    $show_tabs = (strpos($current_url, '/members') !== false && strpos($current_url, '/members/') === false) 
+              || strpos($current_url, '/dashboard') !== false
+              || strpos($current_url, '/czlonkowie') !== false;
+    
+    if (!$show_tabs || !is_user_logged_in()) {
+        return;
+    }
+    ?>
+    
+    <div class="pm-member-tabs" id="pm-member-tabs">
+        <button class="pm-mtab active" data-tab="search">Wyszukaj</button>
+        <button class="pm-mtab" data-tab="liked">Polubieni</button>
+        <button class="pm-mtab" data-tab="likes-me">Lubią Mnie</button>
+        <button class="pm-mtab" data-tab="matches">Matche</button>
+    </div>
+    
+    <div id="pm-tabs-loader" style="display:none; text-align:center; padding:40px;">
+        <div class="pm-spinner"></div>
+        <p style="color:#999; margin-top:15px;">Ładowanie...</p>
+    </div>
+    
+    <div id="pm-tabs-content"></div>
+    
+    <style>
+    /* Mobile Member Tabs - only visible on mobile */
+    .pm-member-tabs {
+        display: none;
+        overflow-x: auto;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        padding: 12px 15px;
+        gap: 8px;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+    
+    .pm-member-tabs::-webkit-scrollbar {
+        display: none;
+    }
+    
+    @media (max-width: 767px) {
+        .pm-member-tabs {
+            display: flex;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            width: 100%;
+            padding-top: env(safe-area-inset-top, 12px);
+        }
+        
+        /* Add padding to body to account for fixed tabs */
+        body.pm-tabs-active {
+            padding-top: calc(50px + env(safe-area-inset-top, 0)) !important;
+        }
+        
+        /* Hide default BuddyPress members search/filter when tabs active */
+        .pm-tabs-active .bp-dir-hori-nav,
+        .pm-tabs-active #members-dir-search,
+        .pm-tabs-active .bp-subnavs,
+        .pm-tabs-active #subnav,
+        .pm-tabs-active .item-list-tabs,
+        .pm-tabs-active .site-header,
+        .pm-tabs-active header,
+        .pm-tabs-active #masthead,
+        .pm-tabs-active .top-header {
+            display: none !important;
+        }
+    }
+    
+    @media (min-width: 768px) {
+        .pm-member-tabs {
+            display: none !important;
+        }
+    }
+    
+    .pm-mtab {
+        flex-shrink: 0;
+        padding: 10px 20px;
+        border: none;
+        background: rgba(255,255,255,0.1);
+        color: rgba(255,255,255,0.7);
+        border-radius: 25px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        white-space: nowrap;
+    }
+    
+    .pm-mtab:hover {
+        background: rgba(255,255,255,0.15);
+    }
+    
+    .pm-mtab.active {
+        background: linear-gradient(135deg, #2ECC71 0%, #27AE60 100%);
+        color: #fff;
+        box-shadow: 0 2px 8px rgba(46,204,113,0.3);
+    }
+    
+    .pm-spinner {
+        width: 40px;
+        height: 40px;
+        border: 3px solid rgba(255,255,255,0.1);
+        border-top-color: #2ECC71;
+        border-radius: 50%;
+        animation: pm-spin 1s linear infinite;
+        margin: 0 auto;
+    }
+    
+    @keyframes pm-spin {
+        to { transform: rotate(360deg); }
+    }
+    
+    /* Tab content member cards */
+    .pm-tab-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 15px;
+        padding: 15px;
+    }
+    
+    .pm-tab-card {
+        background: linear-gradient(135deg, #2d2d3a 0%, #1f1f2e 100%);
+        border-radius: 15px;
+        overflow: hidden;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    }
+    
+    .pm-tab-card img {
+        width: 100%;
+        aspect-ratio: 1;
+        object-fit: cover;
+    }
+    
+    .pm-tab-card-info {
+        padding: 12px;
+    }
+    
+    .pm-tab-card-name {
+        color: #fff;
+        font-weight: 600;
+        font-size: 14px;
+        margin: 0 0 5px 0;
+    }
+    
+    .pm-tab-card-age {
+        color: #2ECC71;
+        font-size: 13px;
+    }
+    
+    .pm-tab-card-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+    }
+    
+    .pm-tab-card-btn {
+        flex: 1;
+        padding: 8px;
+        border: none;
+        border-radius: 8px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    
+    .pm-tab-card-btn.profile {
+        background: rgba(255,255,255,0.1);
+        color: #fff;
+    }
+    
+    .pm-tab-card-btn.message {
+        background: linear-gradient(135deg, #2ECC71 0%, #27AE60 100%);
+        color: #fff;
+    }
+    
+    .pm-empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        color: rgba(255,255,255,0.5);
+    }
+    
+    .pm-empty-state svg {
+        width: 64px;
+        height: 64px;
+        opacity: 0.3;
+        margin-bottom: 15px;
+    }
+    </style>
+    
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const tabsContainer = document.getElementById('pm-member-tabs');
+        const loader = document.getElementById('pm-tabs-loader');
+        const content = document.getElementById('pm-tabs-content');
+        const tabs = document.querySelectorAll('.pm-mtab');
+        
+        if (!tabs.length) return;
+        
+        // Move tabs to the top of the page, right after header
+        const header = document.querySelector('header, .site-header, #masthead, .main-header, .top-header');
+        const mainContent = document.querySelector('main, #main, .site-main, #content, .content-area, #buddypress');
+        
+        if (header && header.parentNode) {
+            // Insert after header
+            header.parentNode.insertBefore(tabsContainer, header.nextSibling);
+            header.parentNode.insertBefore(loader, tabsContainer.nextSibling);
+            header.parentNode.insertBefore(content, loader.nextSibling);
+        } else if (mainContent && mainContent.parentNode) {
+            // Insert before main content
+            mainContent.parentNode.insertBefore(content, mainContent);
+            mainContent.parentNode.insertBefore(loader, content);
+            mainContent.parentNode.insertBefore(tabsContainer, loader);
+        }
+        
+        // Also hide the original header on mobile and show tabs instead
+        if (window.innerWidth <= 767) {
+            const originalHeader = document.querySelector('.site-header, header, #masthead');
+            if (originalHeader) {
+                originalHeader.style.display = 'none';
+            }
+        }
+        
+        const originalContent = document.querySelector('#members-list, .members-list, #item-body, #buddypress .members');
+        
+        // Add class to body for CSS hiding
+        document.body.classList.add('pm-tabs-active');
+        
+        let currentTab = 'search';
+        
+        tabs.forEach(tab => {
+            tab.addEventListener('click', async function() {
+                const tabId = this.dataset.tab;
+                if (tabId === currentTab) return;
+                
+                // Update active state
+                tabs.forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+                currentTab = tabId;
+                
+                // Show/hide content based on tab
+                if (tabId === 'search') {
+                    // Show original BuddyPress content
+                    loader.style.display = 'none';
+                    content.style.display = 'none';
+                    if (originalContent) originalContent.style.display = '';
+                    document.body.classList.remove('pm-tabs-active');
+                } else {
+                    // Load AJAX content
+                    if (originalContent) originalContent.style.display = 'none';
+                    content.style.display = 'block';
+                    loader.style.display = 'block';
+                    document.body.classList.add('pm-tabs-active');
+                    
+                    try {
+                        const endpoint = getEndpoint(tabId);
+                        const response = await fetch(endpoint, {
+                            credentials: 'same-origin',
+                            headers: {
+                                'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>'
+                            }
+                        });
+                        
+                        if (!response.ok) throw new Error('API error');
+                        
+                        const data = await response.json();
+                        loader.style.display = 'none';
+                        renderMembers(data, tabId);
+                    } catch (error) {
+                        console.error('Error loading tab:', error);
+                        loader.style.display = 'none';
+                        content.innerHTML = '<div class="pm-empty-state"><p>Błąd ładowania danych</p></div>';
+                    }
+                }
+            });
+        });
+        
+        function getEndpoint(tabId) {
+            const base = '<?php echo rest_url('sk/v1/'); ?>';
+            switch(tabId) {
+                case 'liked': return base + 'liked';
+                case 'likes-me': return base + 'likes-me';
+                case 'matches': return base + 'matches';
+                default: return base + 'liked';
+            }
+        }
+        
+        function renderMembers(members, tabId) {
+            if (!members || members.length === 0) {
+                const messages = {
+                    'liked': 'Nie masz jeszcze polubionych profili',
+                    'likes-me': 'Nikt jeszcze nie polubił Twojego profilu',
+                    'matches': 'Nie masz jeszcze żadnych matchy'
+                };
+                content.innerHTML = `
+                    <div class="pm-empty-state">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                        </svg>
+                        <p>${messages[tabId] || 'Brak wyników'}</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = '<div class="pm-tab-grid">';
+            members.forEach(member => {
+                const avatar = member.hires_avatar?.large || member.hires_avatar?.full || member.avatar_urls?.full || member.avatar || '';
+                const name = member.name || member.display_name || 'Użytkownik';
+                const age = member.age || '';
+                const url = member.link || member.profile_url || '/members/' + (member.user_nicename || member.id);
+                
+                html += `
+                    <div class="pm-tab-card">
+                        <a href="${url}">
+                            <img src="${avatar}" alt="${name}" loading="lazy">
+                        </a>
+                        <div class="pm-tab-card-info">
+                            <h4 class="pm-tab-card-name">${name}</h4>
+                            ${age ? `<span class="pm-tab-card-age">${age} lat</span>` : ''}
+                            <div class="pm-tab-card-actions">
+                                <a href="${url}" class="pm-tab-card-btn profile">Profil</a>
+                                <a href="${url}bp-messages/" class="pm-tab-card-btn message">💬</a>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            content.innerHTML = html;
+        }
+    });
+    </script>
+    
+    <?php
+}
+add_action('wp_footer', 'pm_mobile_member_tabs', 99);
