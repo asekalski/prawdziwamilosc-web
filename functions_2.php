@@ -6794,9 +6794,26 @@ function sk_get_matches_endpoint($request) {
         // Get last active time
         $last_active = bp_get_user_last_activity($user_id);
         
+        // Check for existing thread with this user
+        $thread_id = 0;
+        if (function_exists('BP_Messages_Thread')) {
+            global $wpdb;
+            $bp = buddypress();
+            // Find existing thread between current user and this match
+            $thread_id = $wpdb->get_var($wpdb->prepare(
+                "SELECT DISTINCT t.thread_id FROM {$bp->messages->table_name_recipients} r1
+                 INNER JOIN {$bp->messages->table_name_recipients} r2 ON r1.thread_id = r2.thread_id
+                 INNER JOIN {$bp->messages->table_name_messages} t ON t.thread_id = r1.thread_id
+                 WHERE r1.user_id = %d AND r2.user_id = %d
+                 LIMIT 1",
+                $current_user_id, $user_id
+            ));
+        }
+        
         $results[] = [
             'id' => $user_id,
             'name' => $user_data->display_name,
+            'login' => $user_data->user_login,
             'mention_name' => $user_data->user_nicename,
             'avatar_urls' => [
                 'full' => $avatar_url
@@ -6806,6 +6823,7 @@ function sk_get_matches_endpoint($request) {
                 'full' => $attach_id ? wp_get_attachment_image_url($attach_id, 'full') : '',
             ],
             'last_activity' => $last_active,
+            'thread_id' => intval($thread_id),
         ];
     }
     
@@ -7891,7 +7909,7 @@ function pm_mobile_member_tabs() {
                             ${age ? `<span class="pm-tab-card-age">${age} lat</span>` : ''}
                             <div class="pm-tab-card-actions">
                                 <a href="${url}" class="pm-tab-card-btn profile">Profil</a>
-                                <a href="<?php echo esc_url(trailingslashit($user_profile_url) . (function_exists('bp_get_messages_slug') ? bp_get_messages_slug() : 'messages')); ?>/compose/?r=${encodeURIComponent(member.user_nicename || member.login || member.name)}" class="pm-tab-card-btn message">💬</a>
+                                <a href="${member.thread_id ? '<?php echo esc_url(trailingslashit($user_profile_url) . (function_exists("bp_get_messages_slug") ? bp_get_messages_slug() : "messages")); ?>/view/' + member.thread_id + '/' : '<?php echo esc_url(trailingslashit($user_profile_url) . (function_exists("bp_get_messages_slug") ? bp_get_messages_slug() : "messages")); ?>/compose/?r=' + encodeURIComponent(member.login || member.mention_name || member.name)}" class="pm-tab-card-btn message">💬</a>
                             </div>
                         </div>
                     </div>
