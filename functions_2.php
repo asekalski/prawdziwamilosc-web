@@ -7161,7 +7161,42 @@ function pm_mobile_member_tabs() {
     if (!$show_tabs || !is_user_logged_in()) {
         return;
     }
+    
+    $user_id = get_current_user_id();
+    $avatar_url = get_avatar_url($user_id, array('size' => 80));
+    $user_profile_url = function_exists('bp_loggedin_user_domain') ? bp_loggedin_user_domain() : home_url('/members/');
+    $messages_url = $user_profile_url . (function_exists('bp_get_messages_slug') ? bp_get_messages_slug() : 'messages') . '/';
+    $unread_count = function_exists('messages_get_unread_count') ? messages_get_unread_count() : 0;
     ?>
+    
+    <!-- Mobile Header Bar -->
+    <div class="pm-mobile-header" id="pm-mobile-header">
+        <div class="pm-mh-left">
+            <button class="pm-mh-btn pm-filter-btn" id="pm-filter-toggle">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="4" y1="6" x2="20" y2="6"></line>
+                    <line x1="4" y1="12" x2="20" y2="12"></line>
+                    <line x1="4" y1="18" x2="20" y2="18"></line>
+                    <circle cx="8" cy="6" r="2" fill="currentColor"></circle>
+                    <circle cx="16" cy="12" r="2" fill="currentColor"></circle>
+                    <circle cx="10" cy="18" r="2" fill="currentColor"></circle>
+                </svg>
+            </button>
+        </div>
+        <div class="pm-mh-right">
+            <a href="<?php echo esc_url($messages_url); ?>" class="pm-mh-btn pm-notif-btn">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
+                </svg>
+                <?php if ($unread_count > 0): ?>
+                    <span class="pm-mh-badge"><?php echo $unread_count > 9 ? '9+' : $unread_count; ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="<?php echo esc_url($user_profile_url); ?>" class="pm-mh-avatar">
+                <img src="<?php echo esc_url($avatar_url); ?>" alt="Profil">
+            </a>
+        </div>
+    </div>
     
     <div class="pm-member-tabs" id="pm-member-tabs">
         <button class="pm-mtab active" data-tab="search">Wyszukaj</button>
@@ -7178,6 +7213,100 @@ function pm_mobile_member_tabs() {
     <div id="pm-tabs-content"></div>
     
     <style>
+    /* Mobile Header Bar - visible only on mobile */
+    .pm-mobile-header {
+        display: none;
+        align-items: center;
+        justify-content: space-between;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        padding: 8px 15px;
+        padding-top: calc(env(safe-area-inset-top, 0) + 8px);
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 101;
+    }
+    
+    @media (max-width: 767px) {
+        .pm-mobile-header {
+            display: flex;
+        }
+    }
+    
+    @media (min-width: 768px) {
+        .pm-mobile-header {
+            display: none !important;
+        }
+    }
+    
+    .pm-mh-left,
+    .pm-mh-right {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    
+    .pm-mh-btn {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.1);
+        border: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        color: #fff;
+        text-decoration: none;
+        position: relative;
+        transition: background 0.2s;
+    }
+    
+    .pm-mh-btn:hover {
+        background: rgba(255,255,255,0.2);
+    }
+    
+    .pm-mh-btn svg {
+        width: 20px;
+        height: 20px;
+    }
+    
+    .pm-notif-btn {
+        background: rgba(255,255,255,0.15);
+    }
+    
+    .pm-mh-badge {
+        position: absolute;
+        top: -2px;
+        right: -2px;
+        background: #f44336;
+        color: #fff;
+        font-size: 10px;
+        font-weight: 600;
+        min-width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 4px;
+    }
+    
+    .pm-mh-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        overflow: hidden;
+        border: 2px solid rgba(255,255,255,0.3);
+    }
+    
+    .pm-mh-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+    
     /* Mobile Member Tabs - only visible on mobile */
     .pm-member-tabs {
         display: none;
@@ -7201,16 +7330,16 @@ function pm_mobile_member_tabs() {
         .pm-member-tabs {
             display: flex;
             position: fixed;
-            top: 0;
+            top: calc(56px + env(safe-area-inset-top, 0));
             left: 0;
             right: 0;
             width: 100%;
-            padding-top: env(safe-area-inset-top, 12px);
+            padding-top: 0;
         }
         
-        /* Add padding to body to account for fixed tabs */
+        /* Add padding to body to account for fixed header + tabs */
         body.pm-tabs-active {
-            padding-top: calc(50px + env(safe-area-inset-top, 0)) !important;
+            padding-top: calc(110px + env(safe-area-inset-top, 0)) !important;
         }
         
         /* Hide default BuddyPress members search/filter when tabs active */
