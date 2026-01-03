@@ -7891,7 +7891,7 @@ function pm_mobile_member_tabs() {
                             ${age ? `<span class="pm-tab-card-age">${age} lat</span>` : ''}
                             <div class="pm-tab-card-actions">
                                 <a href="${url}" class="pm-tab-card-btn profile">Profil</a>
-                                <a href="${url.replace(/\/?$/, '/')}messages/compose/?r=${encodeURIComponent(member.user_nicename || member.login || member.id)}" class="pm-tab-card-btn message">💬</a>
+                                <a href="<?php echo esc_url(trailingslashit($user_profile_url) . (function_exists('bp_get_messages_slug') ? bp_get_messages_slug() : 'messages')); ?>/compose/?r=${encodeURIComponent(member.user_nicename || member.login || member.name)}" class="pm-tab-card-btn message">💬</a>
                             </div>
                         </div>
                     </div>
