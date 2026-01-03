@@ -404,6 +404,25 @@ function grid_uzytkownikow_shortcode()
                         action: 'toggle_like_user',
                         liked_user_id: likedUserId,
                         nonce: '<?php echo wp_create_nonce('like_user_nonce'); ?>'
+                    }, function(response) {
+                        if (response.success && response.data.is_match && response.data.matched_user) {
+                            // Use the global showMatchModal function if available
+                            if (typeof showMatchModal === 'function') {
+                                showMatchModal(response.data.matched_user);
+                            } else if (jQuery('#sk-match-modal').length) {
+                                // Fallback: manually show the modal
+                                var modal = jQuery('#sk-match-modal');
+                                jQuery('#sk-match-matched-avatar').attr('src', response.data.matched_user.avatar);
+                                jQuery('#sk-match-name').text(response.data.matched_user.name);
+                                jQuery('#sk-match-message-btn').attr('href', '<?php echo bp_loggedin_user_domain() ?: home_url('/'); ?>messages/compose/?r=' + response.data.matched_user.id);
+                                modal.fadeIn(300);
+                                modal.find('.sk-match-content').addClass('sk-match-animate-in');
+                                setTimeout(function() {
+                                    modal.find('.sk-match-content').removeClass('sk-match-animate-in');
+                                    modal.fadeOut(200);
+                                }, 4000);
+                            }
+                        }
                     });
                 }
 
