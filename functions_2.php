@@ -7172,16 +7172,7 @@ function pm_mobile_member_tabs() {
     <!-- Mobile Header Bar -->
     <div class="pm-mobile-header" id="pm-mobile-header">
         <div class="pm-mh-left">
-            <button class="pm-mh-btn pm-filter-btn" id="pm-filter-toggle">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="4" y1="6" x2="20" y2="6"></line>
-                    <line x1="4" y1="12" x2="20" y2="12"></line>
-                    <line x1="4" y1="18" x2="20" y2="18"></line>
-                    <circle cx="8" cy="6" r="2" fill="currentColor"></circle>
-                    <circle cx="16" cy="12" r="2" fill="currentColor"></circle>
-                    <circle cx="10" cy="18" r="2" fill="currentColor"></circle>
-                </svg>
-            </button>
+            <button class="pm-mh-btn pm-filter-btn" id="pm-filter-toggle">🔍</button>
         </div>
         <div class="pm-mh-right">
             <a href="<?php echo esc_url($messages_url); ?>" class="pm-mh-btn pm-notif-btn">
