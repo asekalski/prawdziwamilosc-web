@@ -414,7 +414,7 @@ function grid_uzytkownikow_shortcode()
                                 var modal = jQuery('#sk-match-modal');
                                 jQuery('#sk-match-matched-avatar').attr('src', response.data.matched_user.avatar);
                                 jQuery('#sk-match-name').text(response.data.matched_user.name);
-                                jQuery('#sk-match-message-btn').attr('href', '<?php echo bp_loggedin_user_domain() ?: home_url('/'); ?>messages/compose/?r=' + response.data.matched_user.id);
+                                jQuery('#sk-match-message-btn').attr('href', '<?php echo trailingslashit(bp_loggedin_user_domain()) ?: home_url('/'); ?>' + '<?php echo function_exists("bp_get_messages_slug") ? bp_get_messages_slug() : "messages"; ?>' + '/compose/?r=' + encodeURIComponent(response.data.matched_user.login || response.data.matched_user.name));
                                 modal.fadeIn(300);
                                 modal.find('.sk-match-content').addClass('sk-match-animate-in');
                                 setTimeout(function() {
@@ -2149,7 +2149,7 @@ function lewy_panel_uzytkownika_shortcode()
                                 <strong><?php echo esc_html($match['name']); ?></strong>
                                 <span><?php echo esc_html($match['age_location']); ?></span>
                             </div>
-                            <a href="<?php echo wp_nonce_url(bp_loggedin_user_domain() . bp_get_messages_slug() . '/compose/?r=' . $match['login']); ?>"
+                            <a href="<?php echo esc_url(trailingslashit(bp_loggedin_user_domain()) . bp_get_messages_slug() . '/compose/?r=' . urlencode($match['login'])); ?>"
                                 class="send-message-btn">✉️</a>
                         </li>
                     <?php }
@@ -2984,7 +2984,7 @@ function sk_global_like_button_script()
                 var modal = $('#sk-match-modal');
                 $('#sk-match-matched-avatar').attr('src', matchedUser.avatar);
                 $('#sk-match-name').text(matchedUser.name);
-                $('#sk-match-message-btn').attr('href', '<?php echo bp_loggedin_user_domain() ?: home_url('/'); ?>messages/compose/?r=' + matchedUser.id);
+                $('#sk-match-message-btn').attr('href', '<?php echo trailingslashit(bp_loggedin_user_domain()) ?: home_url('/'); ?>' + '<?php echo function_exists("bp_get_messages_slug") ? bp_get_messages_slug() : "messages"; ?>' + '/compose/?r=' + encodeURIComponent(matchedUser.login || matchedUser.name));
                 
                 modal.fadeIn(300);
                 modal.find('.sk-match-content').addClass('sk-match-animate-in');
