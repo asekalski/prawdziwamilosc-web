@@ -7523,8 +7523,8 @@ function pm_mobile_member_tabs() {
         
         const originalContent = document.querySelector('#members-list, .members-list, #item-body, #buddypress .members');
         
-        // Add class to body for CSS hiding
-        document.body.classList.add('pm-tabs-active');
+        // Default tab is 'search' which should show original content
+        // Don't add pm-tabs-active class initially
         
         let currentTab = 'search';
         
