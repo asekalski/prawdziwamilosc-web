@@ -7304,7 +7304,7 @@ function pm_mobile_member_tabs() {
         overflow-x: auto;
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
         padding: 12px 15px;
-        gap: 8px;
+        gap: 4px;
         position: sticky;
         top: 0;
         z-index: 100;
@@ -7355,7 +7355,7 @@ function pm_mobile_member_tabs() {
     
     .pm-mtab {
         flex-shrink: 0;
-        padding: 10px 20px;
+        padding: 10px 12px;
         border: none;
         background: rgba(255,255,255,0.1);
         color: rgba(255,255,255,0.7);
