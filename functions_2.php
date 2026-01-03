@@ -6313,8 +6313,17 @@ function sk_render_matches_list()
                         <div class="match-actions">
                             <a href="<?php bp_member_permalink(); ?>" class="button view-profile">Zobacz Profil</a>
                             <?php if (is_user_logged_in() && bp_loggedin_user_id() != bp_get_member_user_id()) {
-                                $message_link = wp_nonce_url(bp_loggedin_user_domain() . bp_get_messages_slug() . '/compose/?r=' . bp_get_member_user_login());
-                                echo '<a href="' . $message_link . '" class="button message-button-match">✉️ Napisz</a>';
+                                // Build message compose URL
+                                $recipient_login = bp_get_member_user_login();
+                                
+                                // Get user domain with trailing slash
+                                $messages_url = trailingslashit(bp_loggedin_user_domain());
+                                $messages_slug = function_exists('bp_get_messages_slug') ? bp_get_messages_slug() : 'messages';
+                                
+                                // Format: /members/username/messages/compose/?r=recipient_login
+                                $message_link = $messages_url . $messages_slug . '/compose/?r=' . urlencode($recipient_login);
+                                
+                                echo '<a href="' . esc_url($message_link) . '" class="button message-button-match">✉️ Napisz</a>';
                             } ?>
                         </div>
                     </div>
