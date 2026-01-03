@@ -7351,7 +7351,18 @@ function pm_mobile_member_tabs() {
         .pm-tabs-active .members.item-list,
         .pm-tabs-active #members-dir-list,
         .pm-tabs-active .member-loop,
-        .pm-tabs-active #buddypress #members-dir-list {
+        .pm-tabs-active #buddypress #members-dir-list,
+        .pm-tabs-active #buddypress,
+        .pm-tabs-active .buddypress-wrap,
+        .pm-tabs-active .buddypress,
+        .pm-tabs-active .profile-card-view,
+        .pm-tabs-active .bp-list,
+        .pm-tabs-active .bp-list.members-list,
+        .pm-tabs-active #content,
+        .pm-tabs-active .site-content,
+        .pm-tabs-active main,
+        .pm-tabs-active article,
+        .pm-tabs-active .entry-content {
             display: none !important;
         }
     }
