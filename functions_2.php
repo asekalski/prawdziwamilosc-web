@@ -6796,18 +6796,20 @@ function sk_get_matches_endpoint($request) {
         
         // Check for existing thread with this user
         $thread_id = 0;
-        if (function_exists('BP_Messages_Thread')) {
+        if (class_exists('BP_Messages_Thread') || function_exists('messages_get_message_thread_id')) {
             global $wpdb;
             $bp = buddypress();
-            // Find existing thread between current user and this match
-            $thread_id = $wpdb->get_var($wpdb->prepare(
-                "SELECT DISTINCT t.thread_id FROM {$bp->messages->table_name_recipients} r1
-                 INNER JOIN {$bp->messages->table_name_recipients} r2 ON r1.thread_id = r2.thread_id
-                 INNER JOIN {$bp->messages->table_name_messages} t ON t.thread_id = r1.thread_id
-                 WHERE r1.user_id = %d AND r2.user_id = %d
-                 LIMIT 1",
-                $current_user_id, $user_id
-            ));
+            if (isset($bp->messages->table_name_recipients)) {
+                // Find existing thread between current user and this match
+                $thread_id = $wpdb->get_var($wpdb->prepare(
+                    "SELECT r1.thread_id FROM {$bp->messages->table_name_recipients} r1
+                     INNER JOIN {$bp->messages->table_name_recipients} r2 ON r1.thread_id = r2.thread_id
+                     WHERE r1.user_id = %d AND r2.user_id = %d AND r1.user_id != r2.user_id
+                     ORDER BY r1.thread_id DESC
+                     LIMIT 1",
+                    $current_user_id, $user_id
+                ));
+            }
         }
         
         $results[] = [
