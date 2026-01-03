@@ -7328,8 +7328,8 @@ function pm_mobile_member_tabs() {
             padding-top: 0;
         }
         
-        /* Add padding to body to account for fixed header + tabs */
-        body.pm-tabs-active {
+        /* Add padding to body to account for fixed header + tabs - always when tabs visible */
+        body.pm-tabs-visible {
             padding-top: calc(110px + env(safe-area-inset-top, 0)) !important;
         }
         
@@ -7522,6 +7522,9 @@ function pm_mobile_member_tabs() {
         }
         
         const originalContent = document.querySelector('#members-list, .members-list, #item-body, #buddypress .members');
+        
+        // Always add pm-tabs-visible for body padding (header + tabs are always visible)
+        document.body.classList.add('pm-tabs-visible');
         
         // Default tab is 'search' which should show original content
         // Don't add pm-tabs-active class initially
