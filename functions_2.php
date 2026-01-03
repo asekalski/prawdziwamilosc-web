@@ -3791,6 +3791,25 @@ function force_dark_header_footer_inline()
 }
 add_action('wp_head', 'force_dark_header_footer_inline', 9999);
 
+// === UKRYJ KOMUNIKAT "ALREADY HAVE CONVERSATION" W BETTER MESSAGES ===
+function hide_better_messages_existing_conversation_notice() {
+    ?>
+    <style>
+        /* Ukryj komunikat "You already have a conversation with this member" */
+        .bp-messages-content .bm-new-conversation .bm-existing-conversation,
+        .bp-better-messages-mini .bm-existing-conversation,
+        .bm-existing-conversation,
+        .bp-messages .bm-new-conversation > div:first-child:not(.bm-send-to-container),
+        [class*="existing-conversation"],
+        .bp-messages-content .bm-new-conversation > p,
+        .bm-new-conversation > p {
+            display: none !important;
+        }
+    </style>
+    <?php
+}
+add_action('wp_head', 'hide_better_messages_existing_conversation_notice', 9999);
+
 // === NAPRAW STOPKĘ - EKSTRA MOCNE STYLE ===
 
 function force_footer_dark_background()
