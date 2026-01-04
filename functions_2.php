@@ -3328,6 +3328,12 @@ function ajax_filter_users_grid_callback()
             bp_the_member();
             $user_id = bp_get_member_user_id();
 
+            // Pomiń użytkowników bez zdjęcia profilowego
+            $user_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+            if (empty($user_avatar_id)) {
+                continue;
+            }
+
             if (!empty($numerology_filter)) {
                 $birth_date = bp_get_profile_field_data(107, $user_id);
                 $user_numerology = sk_calculate_life_path_number($birth_date);
@@ -8593,3 +8599,94 @@ function sk_display_profile_photo_gallery() {
     <?php
 }
 add_action('bp_before_member_header_meta', 'sk_display_profile_photo_gallery');
+
+// ========================================
+// FILTER: Ukryj użytkowników bez zdjęcia profilowego w REST API (dla aplikacji mobilnej)
+// ========================================
+add_filter('rest_post_dispatch', function($response, $server, $request) {
+    // Tylko dla endpointu members BuddyPress
+    $route = $request->get_route();
+    if (strpos($route, '/buddypress/v1/members') === false) {
+        return $response;
+    }
+    
+    // Tylko dla listy członków (nie pojedynczego profilu ani /me)
+    if (preg_match('/\/members\/(\d+|me)/', $route)) {
+        return $response;
+    }
+    
+    if (is_wp_error($response)) {
+        return $response;
+    }
+    
+    $data = $response->get_data();
+    
+    // Sprawdź czy to tablica memberów
+    if (!is_array($data)) {
+        return $response;
+    }
+    
+    // Filtruj użytkowników bez zdjęcia profilowego
+    $filtered_data = array();
+    foreach ($data as $member) {
+        // Sprawdź czy to member (ma id)
+        if (!is_array($member) || !isset($member['id'])) {
+            $filtered_data[] = $member;
+            continue;
+        }
+        
+        $user_id = intval($member['id']);
+        $has_photo = false;
+        
+        if ($user_id > 0) {
+            // Sprawdź 1: user_avatar_id (zdjęcie wrzucone przez nasz system)
+            $user_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+            if (!empty($user_avatar_id)) {
+                $has_photo = true;
+            }
+            
+            // Sprawdź 2: user_profile_photos_ids (zdjęcia profilowe w galerii)
+            if (!$has_photo) {
+                $profile_photos_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
+                if (!empty($profile_photos_ids) && is_array($profile_photos_ids) && count($profile_photos_ids) > 0) {
+                    $has_photo = true;
+                }
+            }
+            
+            // Sprawdź 3: hires_avatar w odpowiedzi API (avatar BuddyPress)
+            if (!$has_photo && isset($member['hires_avatar'])) {
+                $hires_avatar = $member['hires_avatar'];
+                // Sprawdź czy nie jest to domyślny avatar (mystery-man lub gravatar)
+                if (!empty($hires_avatar) && 
+                    strpos($hires_avatar, 'mystery-man') === false && 
+                    strpos($hires_avatar, 'gravatar.com') === false &&
+                    strpos($hires_avatar, 'default') === false) {
+                    $has_photo = true;
+                }
+            }
+            
+            // Sprawdź 4: avatar_urls w odpowiedzi API
+            if (!$has_photo && isset($member['avatar_urls']) && is_array($member['avatar_urls'])) {
+                foreach ($member['avatar_urls'] as $size => $url) {
+                    if (!empty($url) && 
+                        strpos($url, 'mystery-man') === false && 
+                        strpos($url, 'gravatar.com') === false &&
+                        strpos($url, 'default') === false) {
+                        $has_photo = true;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if ($has_photo) {
+            $filtered_data[] = $member;
+        }
+    }
+    
+    $response->set_data($filtered_data);
+    
+    return $response;
+}, 10, 3);
+
+
