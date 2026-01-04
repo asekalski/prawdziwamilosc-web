@@ -3810,6 +3810,69 @@ function hide_better_messages_existing_conversation_notice() {
 }
 add_action('wp_head', 'hide_better_messages_existing_conversation_notice', 9999);
 
+// Ukryj header i dodaj tło na stronie rejestracji i onboardingu
+function hide_header_on_registration_page() {
+    global $post;
+    if (!$post) return;
+    
+    // Sprawdź czy strona zawiera shortcode rejestracji LUB onboardingu
+    $is_registration = has_shortcode($post->post_content, 'moj_formularz_rejestracji');
+    $is_onboarding = has_shortcode($post->post_content, 'moj_onboarding_form');
+    
+    if (!$is_registration && !$is_onboarding) return;
+
+    ?>
+    <style>
+        /* Ukryj header na stronie rejestracji */
+        body header,
+        body .site-header,
+        body #masthead,
+        body .header-wrapper,
+        body .ast-header-break-point,
+        body .ast-primary-header,
+        body #ast-desktop-header,
+        body #ast-mobile-header {
+            display: none !important;
+        }
+        
+        /* Tło strony rejestracji */
+        body {
+            background: url('https://prawdziwamilosc.pl/venus.jpg') center center / cover no-repeat fixed !important;
+            min-height: 100vh;
+        }
+        
+        /* Glassmorphism dla formularza */
+        .custom-reg-container {
+            background: rgba(255, 255, 255, 0.92) !important;
+            backdrop-filter: blur(20px) !important;
+            -webkit-backdrop-filter: blur(20px) !important;
+            border-radius: 24px !important;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3) !important;
+            padding: 40px !important;
+            max-width: 440px !important;
+            margin: 40px auto !important;
+            border: 1px solid rgba(255, 255, 255, 0.3) !important;
+        }
+        
+        /* Usuń padding z contentu strony */
+        .entry-content,
+        .site-content,
+        #content,
+        main {
+            padding-top: 0 !important;
+        }
+        
+        /* Ukryj footer na stronie rejestracji */
+        body footer,
+        body .site-footer,
+        body #colophon {
+            display: none !important;
+        }
+    </style>
+    <?php
+}
+add_action('wp_head', 'hide_header_on_registration_page', 9999);
+
 // === NAPRAW STOPKĘ - EKSTRA MOCNE STYLE ===
 
 function force_footer_dark_background()
@@ -5142,6 +5205,22 @@ function my_custom_registration_shortcode()
         if (empty($name) || empty($birthdate)) {
             $errors[] = "Wypełnij wszystkie pola.";
         }
+        
+        // Walidacja zdjęcia
+        if (empty($_FILES['profile_photo']['name']) || $_FILES['profile_photo']['error'] !== UPLOAD_ERR_OK) {
+            $errors[] = "Dodaj swoje zdjęcie profilowe.";
+        } else {
+            // Sprawdź typ pliku
+            $allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+            $file_type = wp_check_filetype($_FILES['profile_photo']['name']);
+            if (!in_array($_FILES['profile_photo']['type'], $allowed_types)) {
+                $errors[] = "Dozwolone są tylko pliki graficzne (JPG, PNG, GIF, WEBP).";
+            }
+            // Sprawdź rozmiar (max 5MB)
+            if ($_FILES['profile_photo']['size'] > 5 * 1024 * 1024) {
+                $errors[] = "Zdjęcie jest zbyt duże. Maksymalny rozmiar to 5MB.";
+            }
+        }
 
         if (empty($errors)) {
 
@@ -5174,7 +5253,50 @@ function my_custom_registration_shortcode()
             if (is_wp_error($userid)) {
                 $errors[] = "Błąd rejestracji: " . $userid->get_error_message();
             } else {
-                // SUKCES!
+                // SUKCES! Zapisz zdjęcie tymczasowo
+                
+                // Pobierz activation_key z bazy
+                global $wpdb;
+                $signup = $wpdb->get_row($wpdb->prepare(
+                    "SELECT activation_key FROM {$wpdb->prefix}signups WHERE user_login = %s",
+                    $generated_username
+                ));
+                
+                if ($signup && $signup->activation_key && !empty($_FILES['profile_photo']['name'])) {
+                    $upload_dir = wp_upload_dir();
+                    $temp_dir = $upload_dir['basedir'] . '/temp-avatars/';
+                    
+                    if (!file_exists($temp_dir)) {
+                        wp_mkdir_p($temp_dir);
+                    }
+                    
+                    // Zapisz z nazwą = activation_key
+                    $file_ext = pathinfo($_FILES['profile_photo']['name'], PATHINFO_EXTENSION);
+                    $temp_filename = $signup->activation_key . '.' . $file_ext;
+                    $temp_path = $temp_dir . $temp_filename;
+                    
+                    if (move_uploaded_file($_FILES['profile_photo']['tmp_name'], $temp_path)) {
+                        // Zaktualizuj meta signup o ścieżkę do avatara
+                        $signup_row = $wpdb->get_row($wpdb->prepare(
+                            "SELECT id, meta FROM {$wpdb->prefix}signups WHERE user_login = %s",
+                            $generated_username
+                        ));
+                        
+                        if ($signup_row) {
+                            $meta = maybe_unserialize($signup_row->meta);
+                            if (!is_array($meta)) {
+                                $meta = [];
+                            }
+                            $meta['temp_avatar_path_for_activation'] = $temp_path;
+                            
+                            $wpdb->update(
+                                $wpdb->prefix . 'signups',
+                                ['meta' => maybe_serialize($meta)],
+                                ['id' => $signup_row->id]
+                            );
+                        }
+                    }
+                }
 
                 $output = '<div class="custom-reg-container success-mode">';
                 $output .= '<h2 style="color:green;">Prawie gotowe! 🚀</h2>';
@@ -5218,7 +5340,7 @@ function my_custom_registration_shortcode()
     }
 
     // 2. FORMULARZ EMAIL
-    $output .= '<form method="post" class="reg-form">';
+    $output .= '<form method="post" class="reg-form" enctype="multipart/form-data">';
 
     // Imię
     $output .= '<div class="form-group">';
@@ -5254,14 +5376,69 @@ function my_custom_registration_shortcode()
     $output .= '<input type="password" name="user_pass" required placeholder="Min. 6 znaków">';
     $output .= '</div>';
 
+    // Zdjęcie profilowe
+    $output .= '<div class="form-group">';
+    $output .= '<label>Twoje zdjęcie profilowe</label>';
+    $output .= '<div id="avatar-preview-container" style="margin: 10px 0; display: none;">';
+    $output .= '<img id="avatar-preview" src="" alt="Podgląd" style="max-width: 120px; max-height: 120px; border-radius: 12px; object-fit: cover; border: 3px solid #e91e63;">';
+    $output .= '</div>';
+    $output .= '<label for="profile_photo_input" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #e91e63 0%, #9c27b0 100%); color: white; border-radius: 25px; cursor: pointer; font-weight: 500;">';
+    $output .= '<span id="photo-btn-text">📷 Wybierz zdjęcie</span>';
+    $output .= '</label>';
+    $output .= '<input type="file" name="profile_photo" id="profile_photo_input" accept="image/*" required style="display: none;">';
+    $output .= '<p id="photo-filename" style="margin-top: 8px; color: #666; font-size: 13px;"></p>';
+    $output .= '</div>';
+    
+    $output .= '<script>';
+    $output .= 'document.getElementById("profile_photo_input").addEventListener("change", function(e) {';
+    $output .= '  var file = e.target.files[0];';
+    $output .= '  if (file) {';
+    $output .= '    var reader = new FileReader();';
+    $output .= '    reader.onload = function(event) {';
+    $output .= '      document.getElementById("avatar-preview").src = event.target.result;';
+    $output .= '      document.getElementById("avatar-preview-container").style.display = "block";';
+    $output .= '      document.getElementById("photo-btn-text").textContent = "📷 Zmień zdjęcie";';
+    $output .= '      document.getElementById("photo-filename").textContent = "✓ " + file.name;';
+    $output .= '      var tooltip = document.getElementById("photo-tooltip");';
+    $output .= '      if (tooltip) tooltip.style.display = "none";';
+    $output .= '    };';
+    $output .= '    reader.readAsDataURL(file);';
+    $output .= '  }';
+    $output .= '});';
+    $output .= '</script>';
+
     // Zgody (Opcjonalnie)
     $output .= '<div class="form-check">';
     $output .= '<input type="checkbox" required> <small>Akceptuję regulamin serwisu</small>';
     $output .= '</div>';
 
-    // Przycisk
+    // Przycisk z tooltipem
     $output .= wp_nonce_field('new_user_register', '_wpnonce', true, false);
-    $output .= '<button type="submit" name="submit_registration" class="btn-submit">Załóż darmowe konto</button>';
+    $output .= '<div style="position: relative; display: inline-block; width: 100%;">';
+    $output .= '<div id="photo-tooltip" style="display: none; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 10px; padding: 10px 15px; background: #ff5252; color: white; border-radius: 8px; font-size: 14px; white-space: nowrap; box-shadow: 0 4px 15px rgba(255,82,82,0.4); animation: shake 0.5s ease-in-out;">';
+    $output .= '📷 Musisz dodać zdjęcie profilowe';
+    $output .= '<div style="position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 8px solid transparent; border-top-color: #ff5252;"></div>';
+    $output .= '</div>';
+    $output .= '<button type="submit" name="submit_registration" class="btn-submit" onclick="return validatePhoto();">Załóż darmowe konto</button>';
+    $output .= '</div>';
+    
+    $output .= '<script>';
+    $output .= 'function validatePhoto() {';
+    $output .= '  var photoInput = document.getElementById("profile_photo_input");';
+    $output .= '  var tooltip = document.getElementById("photo-tooltip");';
+    $output .= '  if (!photoInput.files || photoInput.files.length === 0) {';
+    $output .= '    tooltip.style.display = "block";';
+    $output .= '    setTimeout(function() { tooltip.style.display = "none"; }, 3000);';
+    $output .= '    photoInput.scrollIntoView({ behavior: "smooth", block: "center" });';
+    $output .= '    return false;';
+    $output .= '  }';
+    $output .= '  return true;';
+    $output .= '}';
+    $output .= '</script>';
+    
+    $output .= '<style>';
+    $output .= '@keyframes shake { 0%, 100% { transform: translateX(-50%); } 25% { transform: translateX(-55%); } 75% { transform: translateX(-45%); } }';
+    $output .= '</style>';
 
     $output .= '</form>';
 
@@ -5430,29 +5607,74 @@ function my_safe_onboarding_form()
             }
         }
 
-        // 4. Zapis Avatara (bez zmian)
-        if (!empty($_FILES['avatar']['name'])) {
-            require_once(ABSPATH . 'wp-admin/includes/file.php');
-            require_once(ABSPATH . 'wp-admin/includes/image.php');
-            $uploadedfile = $_FILES['avatar'];
-            $upload_overrides = ['test_form' => false];
-            $movefile = wp_handle_upload($uploadedfile, $upload_overrides);
+        // 4. Zapis zdjęć z siatki (photo_1 do photo_6)
+        require_once(ABSPATH . 'wp-admin/includes/file.php');
+        require_once(ABSPATH . 'wp-admin/includes/image.php');
+        require_once(ABSPATH . 'wp-admin/includes/media.php');
 
-            if ($movefile && !isset($movefile['error'])) {
-                $filename = $movefile['file'];
-                $filetype = wp_check_filetype(basename($filename), null);
-                $attachment = [
-                    'guid' => $movefile['url'],
-                    'post_mime_type' => $filetype['type'],
-                    'post_title' => preg_replace('/\.[^.]+$/', '', basename($filename)),
-                    'post_content' => '',
-                    'post_status' => 'inherit'
-                ];
-                $attach_id = wp_insert_attachment($attachment, $filename, 0);
-                $attach_data = wp_generate_attachment_metadata($attach_id, $filename);
-                wp_update_attachment_metadata($attach_id, $attach_data);
-                update_user_meta($user_id, 'user_avatar_id', $attach_id);
+        $profile_photos_ids = [];
+
+        for ($i = 1; $i <= 6; $i++) {
+            $field_name = "photo_$i";
+            if (!empty($_FILES[$field_name]['name'])) {
+                // Używamy media_handle_upload, aby automatycznie dodać plik do Mediów WP
+                $attach_id = media_handle_upload($field_name, 0);
+
+                if (!is_wp_error($attach_id)) {
+                    // Powiąż załącznik z autorem
+                    wp_update_post([
+                        'ID' => $attach_id,
+                        'post_author' => $user_id
+                    ]);
+
+                    $profile_photos_ids[] = $attach_id;
+
+                    // Jeśli to pierwsze zdjęcie, ustaw jako główny avatar (user_avatar_id)
+                    if ($i === 1) {
+                        update_user_meta($user_id, 'user_avatar_id', $attach_id);
+                    }
+                    
+                    // === INTEGRACJA Z RTMEDIA ===
+                    // Dodaj zdjęcie do galerii rtMedia użytkownika
+                    if (class_exists('RTMediaModel')) {
+                        global $wpdb;
+                        $rtmedia_model = new RTMediaModel();
+                        
+                        // Pobierz dane załącznika
+                        $attachment = get_post($attach_id);
+                        $file_url = wp_get_attachment_url($attach_id);
+                        $file_path = get_attached_file($attach_id);
+                        $file_type = wp_check_filetype($file_path);
+                        
+                        // Przygotuj dane do wstawienia do rtMedia
+                        $rtmedia_data = array(
+                            'blog_id'        => get_current_blog_id(),
+                            'media_id'       => $attach_id,
+                            'media_author'   => $user_id,
+                            'media_title'    => $attachment->post_title,
+                            'album_id'       => 0, // Główna galeria profilu
+                            'context'        => 'profile',
+                            'context_id'     => $user_id,
+                            'activity_id'    => 0,
+                            'privacy'        => 0, // Publiczne
+                            'media_type'     => 'photo',
+                            'upload_date'    => current_time('mysql'),
+                        );
+                        
+                        // Wstaw do tabeli rtMedia
+                        $rtmedia_model->insert($rtmedia_data);
+                    }
+                }
             }
+        }
+
+        // Zapisz listę wszystkich dodatkowych zdjęć profilowych
+        if (!empty($profile_photos_ids)) {
+            $existing_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
+            if (!is_array($existing_ids)) $existing_ids = [];
+            
+            $all_ids = array_unique(array_merge($existing_ids, $profile_photos_ids));
+            update_user_meta($user_id, 'user_profile_photos_ids', $all_ids);
         }
 
         // 5. Finalizacja i przekierowanie
@@ -5474,7 +5696,7 @@ function my_safe_onboarding_form()
             <!-- 2. KOGO SZUKAM -->
             <div style="margin-bottom:15px;">
                 <label><strong>Kogo szukasz?</strong></label>
-                <select name="kogo_szukam" required style="width:100%; padding:8px;">
+                <select name="kogo_szukam" style="width:100%; padding:8px;">
                     <option value="">-- Wybierz --</option>
                     <!-- WAŻNE: Wartości "value" muszą być IDENTYCZNE jak opcje w BuddyPress -->
                     <option value="Kobiety">Kobiety</option>
@@ -5483,44 +5705,159 @@ function my_safe_onboarding_form()
                 </select>
             </div>
 
-            <!-- 3. AVATAR -->
-            <div style="margin-bottom:15px;">
-                <label><strong>Zdjęcie profilowe (wymagane)</strong></label><br>
-                <div id="avatar-preview-container" style="margin: 10px 0; display: none;">
-                    <img id="avatar-preview" src="" alt="Podgląd zdjęcia" style="max-width: 200px; max-height: 200px; border-radius: 50%; object-fit: cover; border: 3px solid #e91e63; box-shadow: 0 4px 15px rgba(233,30,99,0.3);">
+            <!-- 3. SIATKA ZDJĘĆ - STYL DATING APP -->
+            <div style="margin-bottom:20px;">
+                <label><strong>Twoje zdjęcia</strong></label>
+                <p style="color: #666; font-size: 13px; margin-bottom: 15px;">Pierwsze zdjęcie to Twój główny avatar. Dodaj więcej, by zwiększyć swoje szanse!</p>
+                
+                <?php
+                // Pobierz aktualny avatar użytkownika
+                $current_avatar_url = '';
+                
+                // Sprawdź czy użytkownik ma już ustawiony avatar (custom)
+                $user_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+                if ($user_avatar_id) {
+                    $current_avatar_url = wp_get_attachment_image_url($user_avatar_id, 'medium');
+                }
+                
+                // Jeśli nie ma custom avatara, sprawdź BuddyPress avatar
+                if (!$current_avatar_url && function_exists('bp_core_fetch_avatar')) {
+                    $bp_avatar = bp_core_fetch_avatar(array(
+                        'item_id' => $user_id,
+                        'type' => 'full',
+                        'html' => false
+                    ));
+                    if ($bp_avatar && strpos($bp_avatar, 'mystery-man') === false && strpos($bp_avatar, 'gravatar') === false) {
+                        $current_avatar_url = $bp_avatar;
+                    }
+                }
+                ?>
+                
+                <div class="photo-grid" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-width: 350px;">
+                    <?php for ($i = 1; $i <= 6; $i++): ?>
+                    <div class="photo-tile" 
+                         id="tile-<?php echo $i; ?>"
+                         onclick="triggerPhotoInput(<?php echo $i; ?>)"
+                         style="
+                            aspect-ratio: 1;
+                            background: <?php echo ($i === 1 && $current_avatar_url) ? 'url('.esc_url($current_avatar_url).')' : 'linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 100%)'; ?>;
+                            background-size: cover;
+                            background-position: center;
+                            border-radius: 12px;
+                            border: 2px dashed <?php echo ($i === 1 && $current_avatar_url) ? '#e91e63' : '#ccc'; ?>;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            cursor: pointer;
+                            position: relative;
+                            overflow: hidden;
+                            transition: all 0.3s ease;
+                         "
+                         onmouseover="this.style.transform='scale(1.05)'; this.style.borderColor='#e91e63';"
+                         onmouseout="this.style.transform='scale(1)'; this.style.borderColor='<?php echo ($i === 1 && $current_avatar_url) ? '#e91e63' : '#ccc'; ?>';">
+                        
+                        <?php if ($i === 1 && $current_avatar_url): ?>
+                            <span class="tile-badge" style="
+                                position: absolute;
+                                top: 5px;
+                                left: 5px;
+                                background: #e91e63;
+                                color: white;
+                                font-size: 10px;
+                                padding: 2px 6px;
+                                border-radius: 10px;
+                            ">Główne</span>
+                        <?php endif; ?>
+                        
+                        <span class="plus-icon" id="plus-<?php echo $i; ?>" style="
+                            font-size: 32px;
+                            color: #999;
+                            display: <?php echo ($i === 1 && $current_avatar_url) ? 'none' : 'block'; ?>;
+                        ">+</span>
+                        
+                        <button type="button" class="remove-btn" id="remove-<?php echo $i; ?>" onclick="event.stopPropagation(); removePhoto(<?php echo $i; ?>);" style="
+                            display: <?php echo ($i === 1 && $current_avatar_url) ? 'flex' : 'none'; ?>;
+                            position: absolute;
+                            top: 5px;
+                            right: 5px;
+                            width: 24px;
+                            height: 24px;
+                            background: rgba(0,0,0,0.6);
+                            color: white;
+                            border: none;
+                            border-radius: 50%;
+                            cursor: pointer;
+                            align-items: center;
+                            justify-content: center;
+                            font-size: 14px;
+                        ">×</button>
+                        
+                        <input type="file" 
+                               name="photo_<?php echo $i; ?>" 
+                               id="photo-input-<?php echo $i; ?>" 
+                               accept="image/*" 
+                               style="display: none;"
+                               onchange="previewPhoto(this, <?php echo $i; ?>)">
+                    </div>
+                    <?php endfor; ?>
                 </div>
-                <label for="avatar-input" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #e91e63 0%, #9c27b0 100%); color: white; border-radius: 25px; cursor: pointer; font-weight: 500; transition: transform 0.2s, box-shadow 0.2s;">
-                    <span id="avatar-btn-text">📷 Wybierz zdjęcie</span>
-                </label>
-                <input type="file" name="avatar" id="avatar-input" accept="image/*" required style="display: none;">
-                <p id="avatar-filename" style="margin-top: 8px; color: #666; font-size: 13px;"></p>
+                
+                <!-- Ukryty input dla głównego avatara (dla kompatybilności) -->
+                <input type="file" name="avatar" id="avatar-input" accept="image/*" style="display: none;">
             </div>
             
             <script>
-            document.getElementById('avatar-input').addEventListener('change', function(e) {
-                var file = e.target.files[0];
-                if (file) {
+            function triggerPhotoInput(index) {
+                document.getElementById('photo-input-' + index).click();
+            }
+            
+            function previewPhoto(input, index) {
+                if (input.files && input.files[0]) {
                     var reader = new FileReader();
-                    reader.onload = function(event) {
-                        var preview = document.getElementById('avatar-preview');
-                        var container = document.getElementById('avatar-preview-container');
-                        var btnText = document.getElementById('avatar-btn-text');
-                        var filename = document.getElementById('avatar-filename');
+                    reader.onload = function(e) {
+                        var tile = document.getElementById('tile-' + index);
+                        tile.style.background = 'url(' + e.target.result + ')';
+                        tile.style.backgroundSize = 'cover';
+                        tile.style.backgroundPosition = 'center';
+                        tile.style.borderStyle = 'solid';
+                        tile.style.borderColor = '#e91e63';
                         
-                        preview.src = event.target.result;
-                        container.style.display = 'block';
-                        btnText.textContent = '📷 Zmień zdjęcie';
-                        filename.textContent = '✓ ' + file.name;
-                    }
-                    reader.readAsDataURL(file);
+                        document.getElementById('plus-' + index).style.display = 'none';
+                        document.getElementById('remove-' + index).style.display = 'flex';
+                        
+                        // Jeśli to pierwszy kafelek, skopiuj do głównego inputa avatara
+                        if (index === 1) {
+                            var avatarInput = document.getElementById('avatar-input');
+                            var dataTransfer = new DataTransfer();
+                            dataTransfer.items.add(input.files[0]);
+                            avatarInput.files = dataTransfer.files;
+                        }
+                    };
+                    reader.readAsDataURL(input.files[0]);
                 }
-            });
+            }
+            
+            function removePhoto(index) {
+                var tile = document.getElementById('tile-' + index);
+                tile.style.background = 'linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 100%)';
+                tile.style.borderStyle = 'dashed';
+                tile.style.borderColor = '#ccc';
+                
+                document.getElementById('plus-' + index).style.display = 'block';
+                document.getElementById('remove-' + index).style.display = 'none';
+                document.getElementById('photo-input-' + index).value = '';
+                
+                // Jeśli to pierwszy kafelek, wyczyść też główny avatar input
+                if (index === 1) {
+                    document.getElementById('avatar-input').value = '';
+                }
+            }
             </script>
 
             <!-- 4. RELIGIA -->
             <div style="margin-bottom:15px;">
                 <label><strong>Podejście do wiary</strong></label>
-                <select name="religia" required style="width:100%; padding:8px;">
+                <select name="religia" style="width:100%; padding:8px;">
                     <option value="">-- Wybierz --</option>
                     <option value="Wierzący">Wierzący</option>
                     <option value="Ateista">Ateista</option>
@@ -5532,7 +5869,7 @@ function my_safe_onboarding_form()
             <!-- 5. POLITYKA -->
             <div style="margin-bottom:15px;">
                 <label><strong>Poglądy polityczne</strong></label>
-                <select name="polityka" required style="width:100%; padding:8px;">
+                <select name="polityka" style="width:100%; padding:8px;">
                     <option value="">-- Wybierz --</option>
                     <option value="Konserwatywne">Konserwatywne</option>
                     <option value="Liberalne">Liberalne</option>
@@ -5544,7 +5881,7 @@ function my_safe_onboarding_form()
             <!-- 6. PRACA -->
             <div style="margin-bottom:15px;">
                 <label><strong>Styl pracy</strong></label>
-                <select name="praca" required style="width:100%; padding:8px;">
+                <select name="praca" style="width:100%; padding:8px;">
                     <option value="">-- Wybierz --</option>
                     <option value="Korporacja">Korporacja</option>
                     <option value="Własny Biznes">Własny Biznes</option>
@@ -5557,7 +5894,7 @@ function my_safe_onboarding_form()
             <!-- 7. DIETA -->
             <div style="margin-bottom:15px;">
                 <label><strong>Styl jedzenia</strong></label>
-                <select name="dieta" required style="width:100%; padding:8px;">
+                <select name="dieta" style="width:100%; padding:8px;">
                     <option value="">-- Wybierz --</option>
                     <option value="Wszystkożerca">Wszystkożerca</option>
                     <option value="Wegetarianin">Wegetarianin</option>
@@ -6802,8 +7139,8 @@ function sk_get_matches_endpoint($request) {
                          wp_get_attachment_image_url($attach_id, 'full');
         }
         // Fallback to BuddyPress avatar
-        if (!$avatar_url) {
-            $avatar_url = bp_core_get_avatar(array(
+        if (!$avatar_url && function_exists('bp_core_fetch_avatar')) {
+            $avatar_url = bp_core_fetch_avatar(array(
                 'item_id' => $user_id,
                 'type' => 'full',
                 'html' => false
@@ -7310,13 +7647,79 @@ function sk_set_avatar_after_activation($user_id, $key, $user) {
         $temp_file = $files[0];
         error_log("Found temp file: $temp_file");
         
-        // Ustaw jako avatar BuddyPress
+        // 1. Dodaj plik do WordPress Media Library
+        require_once(ABSPATH . 'wp-admin/includes/file.php');
+        require_once(ABSPATH . 'wp-admin/includes/image.php');
+        require_once(ABSPATH . 'wp-admin/includes/media.php');
+        
+        $ext = pathinfo($temp_file, PATHINFO_EXTENSION);
+        $filename = 'avatar-' . $user_id . '-' . time() . '.' . $ext;
+        $new_file_path = $upload_dir['path'] . '/' . $filename;
+        
+        // Kopiuj plik (nie przenoś, bo potrzebujemy go jeszcze dla BuddyPress)
+        copy($temp_file, $new_file_path);
+        
+        // Sprawdź typ pliku
+        $filetype = wp_check_filetype($filename, null);
+        
+        // Stwórz attachment w Media Library
+        $attachment = array(
+            'guid'           => $upload_dir['url'] . '/' . $filename,
+            'post_mime_type' => $filetype['type'],
+            'post_title'     => 'Avatar użytkownika ' . $user_id,
+            'post_content'   => '',
+            'post_status'    => 'inherit',
+            'post_author'    => $user_id
+        );
+        
+        $attach_id = wp_insert_attachment($attachment, $new_file_path);
+        
+        if (!is_wp_error($attach_id) && $attach_id) {
+            // Wygeneruj metadata dla attachment
+            $attach_data = wp_generate_attachment_metadata($attach_id, $new_file_path);
+            wp_update_attachment_metadata($attach_id, $attach_data);
+            
+            // 2. Ustaw user_avatar_id w user meta - TO JEST KLUCZOWE!
+            update_user_meta($user_id, 'user_avatar_id', $attach_id);
+            error_log("Set user_avatar_id to: $attach_id for user: $user_id");
+            
+            // Dodaj też do listy zdjęć profilowych
+            $existing_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
+            if (!is_array($existing_ids)) {
+                $existing_ids = [];
+            }
+            if (!in_array($attach_id, $existing_ids)) {
+                $existing_ids[] = $attach_id;
+                update_user_meta($user_id, 'user_profile_photos_ids', $existing_ids);
+            }
+            
+            // 3. Integracja z rtMedia (jeśli dostępne)
+            if (class_exists('RTMediaModel')) {
+                $rtmedia_model = new RTMediaModel();
+                $rtmedia_data = array(
+                    'blog_id'       => get_current_blog_id(),
+                    'media_id'      => $attach_id,
+                    'media_author'  => $user_id,
+                    'media_title'   => 'Avatar',
+                    'album_id'      => 0,
+                    'context'       => 'profile',
+                    'context_id'    => $user_id,
+                    'activity_id'   => 0,
+                    'privacy'       => 0,
+                    'media_type'    => 'photo',
+                    'upload_date'   => current_time('mysql'),
+                );
+                $rtmedia_model->insert($rtmedia_data);
+                error_log("Added avatar to rtMedia for user: $user_id");
+            }
+        }
+        
+        // 4. Ustaw jako avatar BuddyPress (oryginalna logika)
         $avatar_dir = bp_core_avatar_upload_path() . '/avatars/' . $user_id . '/';
         wp_mkdir_p($avatar_dir);
         error_log("Avatar dir: $avatar_dir");
         
         // Standardowe nazwy plików BuddyPress
-        $ext = pathinfo($temp_file, PATHINFO_EXTENSION);
         $avatar_full = $avatar_dir . $user_id . '-bpfull.' . $ext;
         $avatar_thumb = $avatar_dir . $user_id . '-bpthumb.' . $ext;
         
@@ -7945,3 +8348,248 @@ function pm_mobile_member_tabs() {
     <?php
 }
 add_action('wp_footer', 'pm_mobile_member_tabs', 99);
+
+// ============================================================================
+// GALERIA ZDJĘĆ NA PROFILU UŻYTKOWNIKA
+// ============================================================================
+
+/**
+ * Wyświetla galerię zdjęć użytkownika na jego profilu BuddyPress
+ * Pokazuje główne zdjęcie (avatar) oraz dodatkowe zdjęcia z onboardingu
+ */
+function sk_display_profile_photo_gallery() {
+    if (!function_exists('bp_displayed_user_id')) return;
+    
+    $user_id = bp_displayed_user_id();
+    if (!$user_id) return;
+    
+    // Pobierz główne zdjęcie (avatar)
+    $avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+    
+    // Pobierz dodatkowe zdjęcia
+    $photo_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
+    if (!is_array($photo_ids)) $photo_ids = [];
+    
+    // Zbierz wszystkie zdjęcia (avatar + dodatkowe, bez duplikatów)
+    $all_photo_ids = [];
+    if ($avatar_id) {
+        $all_photo_ids[] = $avatar_id;
+    }
+    foreach ($photo_ids as $pid) {
+        if ($pid && !in_array($pid, $all_photo_ids)) {
+            $all_photo_ids[] = $pid;
+        }
+    }
+    
+    // Jeśli nie ma żadnych zdjęć, nie wyświetlaj galerii
+    if (empty($all_photo_ids)) return;
+    
+    // Jeśli jest tylko jedno zdjęcie, nie wyświetlaj galerii (avatar jest widoczny domyślnie)
+    if (count($all_photo_ids) <= 1) return;
+    
+    ?>
+    <div class="profile-photo-gallery" style="
+        margin: 20px 0;
+        padding: 15px;
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    ">
+        <h4 style="
+            margin: 0 0 15px 0;
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        ">
+            <span style="font-size: 20px;">📸</span> Zdjęcia
+            <span style="
+                background: #e91e63;
+                color: white;
+                font-size: 12px;
+                padding: 2px 8px;
+                border-radius: 10px;
+                font-weight: normal;
+            "><?php echo count($all_photo_ids); ?></span>
+        </h4>
+        
+        <div class="photo-gallery-grid" style="
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        ">
+            <?php foreach ($all_photo_ids as $index => $photo_id): 
+                $photo_url = wp_get_attachment_image_url($photo_id, 'medium_large');
+                $photo_full_url = wp_get_attachment_image_url($photo_id, 'full');
+                if (!$photo_url) continue;
+            ?>
+            <div class="gallery-photo-item" 
+                 onclick="openPhotoLightbox(<?php echo $index; ?>)"
+                 style="
+                    aspect-ratio: 1;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    cursor: pointer;
+                    position: relative;
+                    transition: transform 0.2s ease;
+                 "
+                 onmouseover="this.style.transform='scale(1.03)';"
+                 onmouseout="this.style.transform='scale(1)';"
+                 data-full-url="<?php echo esc_url($photo_full_url); ?>">
+                <img src="<?php echo esc_url($photo_url); ?>" 
+                     alt="Zdjęcie profilowe <?php echo $index + 1; ?>"
+                     style="
+                        width: 100%;
+                        height: 100%;
+                        object-fit: cover;
+                     ">
+                <?php if ($index === 0): ?>
+                <span style="
+                    position: absolute;
+                    bottom: 5px;
+                    left: 5px;
+                    background: #e91e63;
+                    color: white;
+                    font-size: 10px;
+                    padding: 2px 6px;
+                    border-radius: 8px;
+                ">Główne</span>
+                <?php endif; ?>
+            </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+    
+    <!-- Lightbox do powiększania zdjęć -->
+    <div id="photo-lightbox" onclick="closePhotoLightbox()" style="
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.9);
+        z-index: 99999;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+    ">
+        <button onclick="event.stopPropagation(); navigatePhoto(-1);" style="
+            position: absolute;
+            left: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            font-size: 24px;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            cursor: pointer;
+            z-index: 100000;
+        ">❮</button>
+        
+        <img id="lightbox-image" src="" alt="Powiększone zdjęcie" style="
+            max-width: 90%;
+            max-height: 90%;
+            object-fit: contain;
+            border-radius: 8px;
+        " onclick="event.stopPropagation();">
+        
+        <button onclick="event.stopPropagation(); navigatePhoto(1);" style="
+            position: absolute;
+            right: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            font-size: 24px;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            cursor: pointer;
+            z-index: 100000;
+        ">❯</button>
+        
+        <button onclick="closePhotoLightbox();" style="
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            font-size: 20px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            z-index: 100000;
+        ">✕</button>
+        
+        <div id="lightbox-counter" style="
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 14px;
+            background: rgba(0,0,0,0.5);
+            padding: 5px 15px;
+            border-radius: 20px;
+        "></div>
+    </div>
+    
+    <script>
+    var galleryPhotos = [];
+    var currentPhotoIndex = 0;
+    
+    document.querySelectorAll('.gallery-photo-item').forEach(function(item, index) {
+        galleryPhotos.push(item.getAttribute('data-full-url'));
+    });
+    
+    function openPhotoLightbox(index) {
+        currentPhotoIndex = index;
+        var lightbox = document.getElementById('photo-lightbox');
+        var image = document.getElementById('lightbox-image');
+        var counter = document.getElementById('lightbox-counter');
+        
+        image.src = galleryPhotos[index];
+        counter.textContent = (index + 1) + ' / ' + galleryPhotos.length;
+        lightbox.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+    
+    function closePhotoLightbox() {
+        document.getElementById('photo-lightbox').style.display = 'none';
+        document.body.style.overflow = '';
+    }
+    
+    function navigatePhoto(direction) {
+        currentPhotoIndex += direction;
+        if (currentPhotoIndex < 0) currentPhotoIndex = galleryPhotos.length - 1;
+        if (currentPhotoIndex >= galleryPhotos.length) currentPhotoIndex = 0;
+        
+        var image = document.getElementById('lightbox-image');
+        var counter = document.getElementById('lightbox-counter');
+        
+        image.src = galleryPhotos[currentPhotoIndex];
+        counter.textContent = (currentPhotoIndex + 1) + ' / ' + galleryPhotos.length;
+    }
+    
+    // Obsługa klawiszy strzałek
+    document.addEventListener('keydown', function(e) {
+        var lightbox = document.getElementById('photo-lightbox');
+        if (lightbox.style.display === 'flex') {
+            if (e.key === 'ArrowLeft') navigatePhoto(-1);
+            if (e.key === 'ArrowRight') navigatePhoto(1);
+            if (e.key === 'Escape') closePhotoLightbox();
+        }
+    });
+    </script>
+    <?php
+}
+add_action('bp_before_member_header_meta', 'sk_display_profile_photo_gallery');
