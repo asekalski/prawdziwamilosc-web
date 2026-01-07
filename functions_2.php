@@ -3399,7 +3399,7 @@ function ajax_filter_users_grid_callback()
             echo '  </div>';
             echo '  <div class="card-body">';
             echo '      <div class="user-card-avatar">';
-            echo bp_member_avatar('type=full');
+            echo bp_member_avatar('type=full&width=400&height=400');
             echo $activity_indicator_html;
             echo '      </div>';
             echo '      <div class="user-card-info">';
@@ -6670,7 +6670,7 @@ function sk_render_matches_list()
                 bp_the_member(); ?>
                 <div class="user-card-match">
                     <div class="match-avatar"><a
-                            href="<?php bp_member_permalink(); ?>"><?php bp_member_avatar('type=full&width=150&height=150'); ?></a>
+                            href="<?php bp_member_permalink(); ?>"><?php bp_member_avatar('type=full&width=300&height=300'); ?></a>
                     </div>
                     <div class="match-info">
                         <h3><a href="<?php bp_member_permalink(); ?>"><?php bp_member_name(); ?></a></h3>
@@ -7085,16 +7085,51 @@ function pm_add_hires_avatar_to_rest($response, $user, $request) {
             'attachment_id' => $attach_id
         );
     } else {
-        // No custom avatar, return empty
-        $response->data['hires_avatar'] = array(
-            'full' => '',
-            'large' => '',
-            'attachment_id' => 0
-        );
+        // Fallback: Pobierz avatar BuddyPress w dużej rozdzielczości
+        $bp_avatar_full = bp_core_fetch_avatar([
+            'item_id' => $user_id,
+            'object'  => 'user',
+            'type'    => 'full',
+            'width'   => 500,
+            'height'  => 500,
+            'html'    => false // zwróć URL zamiast HTML
+        ]);
+        
+        $bp_avatar_large = bp_core_fetch_avatar([
+            'item_id' => $user_id,
+            'object'  => 'user',
+            'type'    => 'full',
+            'width'   => 300,
+            'height'  => 300,
+            'html'    => false
+        ]);
+        
+        // Sprawdź czy avatar nie jest domyślnym (gravatar, mystery-man)
+        $is_default = empty($bp_avatar_full) || 
+                      strpos($bp_avatar_full, 'mystery-man') !== false || 
+                      strpos($bp_avatar_full, 'gravatar.com') !== false ||
+                      strpos($bp_avatar_full, '/avatars/') === false;
+        
+        if (!$is_default) {
+            $response->data['hires_avatar'] = array(
+                'full' => $bp_avatar_full,
+                'large' => $bp_avatar_large ? $bp_avatar_large : $bp_avatar_full,
+                'attachment_id' => 0,
+                'source' => 'buddypress'
+            );
+        } else {
+            // No custom avatar, return empty
+            $response->data['hires_avatar'] = array(
+                'full' => '',
+                'large' => '',
+                'attachment_id' => 0
+            );
+        }
     }
     
     return $response;
 }
+
 
 // ============================================
 // CUSTOM REST API: Matches Endpoint
