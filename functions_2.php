@@ -5308,7 +5308,9 @@ function my_custom_registration_shortcode()
                 $output .= '<h2 style="color:green;">Prawie gotowe! 🚀</h2>';
                 $output .= '<p>Na Twój adres <strong>' . esc_html($email) . '</strong> wysłaliśmy link aktywacyjny.</p>';
                 $output .= '<p>Kliknij w niego, aby dokończyć zakładanie konta.</p>';
+                $output .= '<p style="color:#d63031; font-weight:600;">⚠️ Sprawdź również folder SPAM/Oferty!</p>';
                 $output .= '<a href="' . wp_login_url() . '" class="btn-submit" style="text-align:center; display:block; text-decoration:none;">Przejdź do logowania</a>';
+
                 $output .= '</div>';
 
                 return $output;
