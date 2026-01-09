@@ -463,11 +463,34 @@ function grid_uzytkownikow_shortcode()
                 }
             });
 
-            fetch('<?php echo admin_url('admin-ajax.php?action=load_users_grid'); ?>', { credentials: 'same-origin' })
+            function loadUsers(filters = {}) {
+                const container = document.getElementById('user-results'); // FIXED: Matches HTML ID
+                if(!container) return; // Safety check
+
+                // Show loading state if it's not the initial specific "Loading..." p tag
+                if (!container.querySelector('.loading-message')) {
+                     // Using a subtle opacity change or small loader usually better than wiping content
+                     container.style.opacity = '0.5';
+                }
+
+                const formData = new FormData();
+                formData.append('action', 'load_users_grid');
+                
+                // Add filters to FormData
+                for (const [key, value] of Object.entries(filters)) {
+                    if(value) formData.append(`filters[${key}]`, value);
+                }
+
+                fetch('<?php echo admin_url('admin-ajax.php'); ?>', { 
+                    method: 'POST',
+                    body: formData, 
+                    credentials: 'same-origin' 
+                })
                 .then(response => response.json())
                 .then(data => {
+                    container.style.opacity = '1';
                     if (!data.success || !Array.isArray(data.data) || data.data.length === 0) {
-                        container.innerHTML = '<p class="no-users-message">Brak użytkowników spełniających kryteria</p>';
+                        container.innerHTML = '<p class="no-users-message" style="grid-column: 1/-1; text-align: center; color: white;">Brak użytkowników spełniających kryteria</p>';
                         return;
                     }
                     container.innerHTML = '';
@@ -513,6 +536,8 @@ function grid_uzytkownikow_shortcode()
 
                         ${user.location ? `<div class="user-location">${user.location}</div>` : ''}
 
+                        ${user.bio ? `<div class="user-bio">${user.bio}</div>` : ''}
+
                         ${metaTags ? `<div class="user-meta">${metaTags}</div>` : ''}
 
                         <div class="card-actions">
@@ -546,7 +571,133 @@ function grid_uzytkownikow_shortcode()
                 `;
                         container.appendChild(userCard);
                     });
+                })
+                .catch(err => {
+                    console.error('Error loading users:', err);
+                    container.style.opacity = '1';
                 });
+            }
+
+            // Initial load
+            loadUsers();
+
+            // Helper to get value securely
+            function getFilterValue(selectors) {
+                 for (let selector of selectors) {
+                     let el = document.querySelector(selector);
+                     if (el) {
+                         if ((el.type === 'radio' || el.type === 'checkbox') && !el.checked) continue;
+                         if (el.value) return el.value;
+                     }
+                 }
+                 return '';
+            }
+            
+            // --- ROBUST RESET BUTTON INJECTION & FILTER HANDLING ---
+            
+            function findGotoweButton() {
+                // Search for any clickable element containing "Gotowe"
+                // prioritizing buttons and inputs
+                const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], .elementor-button'));
+                return candidates.find(el => (el.innerText && el.innerText.includes('Gotowe')) || (el.value && el.value.includes('Gotowe')));
+            }
+
+            function injectResetButton() {
+                // Prevent multiple injections
+                if (document.querySelector('.reset-filters-btn-container')) return;
+
+                const gotoweBtn = findGotoweButton();
+                if (!gotoweBtn) return;
+
+                // Find a stable container to inject into. 
+                // We want to be at the bottom of the form.
+                const form = gotoweBtn.closest('form');
+                const container = form ? form : gotoweBtn.closest('.elementor-widget-container') || gotoweBtn.parentElement.parentElement;
+
+                if (container) {
+                    const resetBtnContainer = document.createElement('div');
+                    resetBtnContainer.className = 'reset-filters-btn-container';
+                    resetBtnContainer.style.marginTop = '15px';
+                    resetBtnContainer.style.textAlign = 'center';
+                    resetBtnContainer.style.width = '100%';
+                    resetBtnContainer.style.clear = 'both'; 
+
+                    const resetBtn = document.createElement('button');
+                    resetBtn.innerText = 'Zresetuj wszystkie filtry';
+                    resetBtn.className = 'reset-filters-btn'; // Class for event delegation
+                    resetBtn.type = 'button'; 
+                    resetBtn.style.padding = '10px 20px';
+                    resetBtn.style.background = 'transparent';
+                    resetBtn.style.color = '#e74c3c';
+                    resetBtn.style.border = '1px solid #e74c3c';
+                    resetBtn.style.borderRadius = '25px';
+                    resetBtn.style.cursor = 'pointer';
+                    resetBtn.style.width = '100%';
+                    resetBtn.style.fontWeight = '600';
+                    resetBtn.style.transition = 'all 0.3s ease';
+
+                    resetBtn.onmouseover = function() { this.style.background = '#e74c3c'; this.style.color = 'white'; };
+                    resetBtn.onmouseout = function() { this.style.background = 'transparent'; this.style.color = '#e74c3c'; };
+
+                    resetBtnContainer.appendChild(resetBtn);
+                    container.appendChild(resetBtnContainer);
+                }
+            }
+
+            // Run injection logic repeatedly to catch dynamic updates
+            setInterval(injectResetButton, 1000);
+
+            // Global Click Listener
+            document.addEventListener('click', function(e) {
+                const target = e.target;
+                
+                // 1. RESET BUTTON CLICK
+                if (target.matches('.reset-filters-btn') || target.innerText === 'Zresetuj wszystkie filtry') {
+                     e.preventDefault();
+                     e.stopPropagation();
+                     
+                     // Helper to clear form
+                     const form = target.closest('form');
+                     if(form) form.reset();
+
+                     // Specific clear for common fields
+                     document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(el => el.checked = false);
+                     document.querySelectorAll('select').forEach(el => el.selectedIndex = 0);
+                     
+                     // Helper to reset specific inputs by name
+                     const clearInput = (name) => {
+                         const el = document.querySelector(`[name="${name}"]`) || document.querySelector(`#${name}`);
+                         if(el) el.value = '';
+                     };
+                     
+                     // Explicitly clear Age fields
+                     clearInput('min_age');
+                     clearInput('max_age');
+                     
+                     loadUsers(); // Reload with empty filters
+                     return;
+                }
+
+                // 2. GOTOWE (FILTER) BUTTON CLICK
+                // We assume the user clicks something that looks like "Gotowe"
+                const gotoweBtn = target.closest('a, button, input[type="submit"], .elementor-button');
+                
+                if (gotoweBtn && ((gotoweBtn.innerText && gotoweBtn.innerText.includes('Gotowe')) || (gotoweBtn.value && gotoweBtn.value.includes('Gotowe')))) {
+                    e.preventDefault();
+                    
+                    // Harvest filters using multiple possible names
+                    const filters = {
+                        religion: getFilterValue(['[name="religia"]', '[name="religion"]', 'select[name="field_2"]']),
+                        politics: getFilterValue(['[name="polityka"]', '[name="politics"]']),
+                        work: getFilterValue(['[name="styl_pracy"]', '[name="work"]']), 
+                        diet: getFilterValue(['[name="dieta"]', '[name="diet"]', '[name="styl_jedzenia"]']),
+                        min_age: getFilterValue(['[name="min_age"]', '#min_age']),
+                        max_age: getFilterValue(['[name="max_age"]', '#max_age'])
+                    };
+
+                    loadUsers(filters);
+                }
+            });
         });
     </script>
 
@@ -664,9 +815,24 @@ function grid_uzytkownikow_shortcode()
 
         /* Location */
         .user-location {
-            font-size: 0.875rem;
-            color: #f5f5f5;
-            margin-bottom: 10px;
+            font-size: 0.85rem;
+            color: #d4af37;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .user-bio {
+            font-size: 0.85rem;
+            color: #ccc;
+            margin-bottom: 12px;
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            text-overflow: ellipsis;
+            overflow: hidden;
         }
 
         /* Meta Items */
@@ -1414,6 +1580,46 @@ function load_users_grid_with_preferences_ajax()
         if ($match_me_obj && is_callable([$match_me_obj, 'hmk_get_matching_percentage_number'])) {
             $match_percentage = $match_me_obj->hmk_get_matching_percentage_number($user_id, $current_user_id);
         }
+        // --- FILTERING LOGIC ---
+        // Get filters from POST or use defaults
+        $filter_religion = isset($_POST['filters']['religion']) ? sanitize_text_field($_POST['filters']['religion']) : '';
+        $filter_politics = isset($_POST['filters']['politics']) ? sanitize_text_field($_POST['filters']['politics']) : '';
+        $filter_work = isset($_POST['filters']['work']) ? sanitize_text_field($_POST['filters']['work']) : '';
+        $filter_diet = isset($_POST['filters']['diet']) ? sanitize_text_field($_POST['filters']['diet']) : '';
+        $filter_min_age = isset($_POST['filters']['min_age']) ? intval($_POST['filters']['min_age']) : 18;
+        $filter_max_age = isset($_POST['filters']['max_age']) ? intval($_POST['filters']['max_age']) : 100;
+
+        // Filter by Age
+        $birth_date_raw = bp_get_profile_field_data(['field' => 107, 'user_id' => $user_id]);
+        if ($birth_date_raw) {
+             $age = floor((time() - strtotime($birth_date_raw)) / 31556926);
+             if ($age < $filter_min_age || $age > $filter_max_age) {
+                 continue;
+             }
+        }
+
+        // Filter by details
+        if (!empty($filter_religion)) {
+            $user_religion = bp_get_profile_field_data(['field' => 'Podejście do wiary', 'user_id' => $user_id]);
+            if ($user_religion !== $filter_religion) continue;
+        }
+
+        if (!empty($filter_politics)) {
+            $user_politics = bp_get_profile_field_data(['field' => 'Poglądy polityczne', 'user_id' => $user_id]);
+            if ($user_politics !== $filter_politics) continue;
+        }
+
+        if (!empty($filter_work)) {
+            $user_work = bp_get_profile_field_data(['field' => 'Styl pracy', 'user_id' => $user_id]);
+            if ($user_work !== $filter_work) continue;
+        }
+
+        if (!empty($filter_diet)) {
+            // Note: Field name varies, checking 'Styl jedzenia' based on previous lines
+            $user_diet = bp_get_profile_field_data(['field' => 'Styl jedzenia', 'user_id' => $user_id]);
+             if ($user_diet !== $filter_diet) continue;
+        }
+
         $location = bp_get_profile_field_data(['field' => 'Lokalizacja', 'user_id' => $user_id]);
         $bio = bp_get_profile_field_data(['field' => 343, 'user_id' => $user_id]);
         $last_active_time = bp_get_user_last_activity($user_id);
@@ -1430,7 +1636,8 @@ function load_users_grid_with_preferences_ajax()
             'name' => $user->display_name,
             'match' => intval($match_percentage),
             'profile_url' => bp_members_get_user_url($user_id),
-            'avatar' => get_avatar_url($user_id, ['size' => 200]),
+            // Użyj bp_core_fetch_avatar dla lepszej jakości (type=full)
+            'avatar' => bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]),
             'location' => $location ? esc_html($location) : 'Brak lokalizacji',
             'bio' => $bio ? esc_html(wp_trim_words($bio, 15, '...')) : '',
             'details' => [
@@ -7131,6 +7338,24 @@ function pm_add_hires_avatar_to_rest($response, $user, $request) {
 }
 
 
+
+// ============================================
+// CUSTOM REST API: Members Endpoint
+// ============================================
+
+/**
+ * Register REST API endpoint for getting members with filters
+ */
+add_action('rest_api_init', function () {
+    register_rest_route('sk/v1', '/members', [
+        'methods' => 'GET',
+        'callback' => 'sk_get_members_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+});
+
 // ============================================
 // CUSTOM REST API: Matches Endpoint
 // ============================================
@@ -7300,6 +7525,179 @@ function sk_get_liked_users_endpoint($request) {
     }
     
     return rest_ensure_response($results);
+}
+
+
+
+// Custom Members Endpoint Callback
+function sk_get_members_endpoint($request) {
+    $current_user_id = get_current_user_id();
+    
+    // Pagination params
+    $page = $request->get_param('page') ?: 1;
+    $per_page = $request->get_param('per_page') ?: 20;
+    $search = $request->get_param('search');
+    
+    // Filter params
+    $min_age = $request->get_param('min_age');
+    $max_age = $request->get_param('max_age');
+    $faith = $request->get_param('faith'); 
+    $politics = $request->get_param('politics');
+    $work = $request->get_param('work');
+    $diet = $request->get_param('diet');
+    $has_bio = $request->get_param('has_bio');
+
+    $args = [
+        'page' => $page,
+        'per_page' => $per_page,
+        'search_terms' => $search,
+        'type' => 'active', // Sort by last active
+        'populate_extras' => false, // We'll fetch custom data
+    ];
+
+    // Exclude current user and blocked users (if logic exists)
+    $exclude_ids = [$current_user_id, 1]; // Always exclude admin/self
+    $blocked_users = get_user_meta($current_user_id, 'sk_blocked_users', true);
+    if (is_array($blocked_users)) {
+        $exclude_ids = array_merge($exclude_ids, $blocked_users);
+    }
+    $args['exclude'] = $exclude_ids;
+
+    // Build xProfile Query
+    $xprofile_query = ['relation' => 'AND'];
+    
+    // Age Filtering (assuming Data urodzenia is field ID 1 or name 'Data urodzenia')
+    if ($min_age || $max_age) {
+        $min = $min_age ?: 18;
+        $max = $max_age ?: 100;
+        
+        // Calculate date range for age
+        // Age X means born between Today-(X+1)years + 1 day AND Today-X years
+        // Actually simpler: Born BEFORE (today - min years) AND Born AFTER (today - max years - 1 year)
+        
+        // Simplification for BP xprofile date field which is usually Y-m-d
+        // Using 'range' type requires specific setup.
+        // Let's rely on standard logic used in other plugin parts if available, 
+        // OR construct query manually.
+        // Since we don't have standard range support easily for date fields without extra code,
+        // let's assume 'Data urodzenia' is stored as Y-m-d.
+        
+        // Using the field ID we saw earlier? No ID for age seen.
+        // Let's try name 'Data urodzenia'.
+        
+        // $xprofile_query[] = [
+        //    'field' => 'Data urodzenia',
+        //    'value' => ... // Range queries on dates are hard in standard BP_User_Query without custom SQL filter
+        // ];
+        
+        /* 
+           NOTE: Standard BP doesn't support range query on dates easily.
+           We might need to rely on the existing filter logic or handle age via manual loop (bad for pagination).
+           However, earlier we saw 'ajax_filter_users_grid_callback' which didn't have age.
+           But 'getMembers' in MembersScreen.js passes 'min_age', 'max_age' to BP API which supports it via plugin maybe?
+           If standard BP API supports it, we might want to leverage that.
+           But we are writing a custom SQL query here via BP_User_Query.
+           
+           Let's temporarily skip COMPLEX age custom query building and assume 
+           'sk_filter_members_by_age' (which we saw in task list earlier? no) 
+           or similar plugin hooks handle 'xprofile_query' if we pass special format.
+           
+           Actually, the best way is to fetch all matching other criteria and filter by age in loop IF the dataset is small? 
+           NO, pagination breaks.
+           
+           Let's use the standard BP REST API approach for age if possible...
+           But we are in a custom endpoint.
+           
+           Solution: Use the helper function if it exists, or just omit age filter for now in Query 
+           and handle it via hook?
+           Let's look at `ajax_filter_users_grid_callback` again. It didn't have age.
+           
+           Let's proceed with IDs we found for other fields:
+           Faith: 133
+           Politics: 215
+           Work: 108
+           Diet: 334
+        */
+    }
+
+    $field_id_map = [
+        'faith' => 133,
+        'politics' => 215,
+        'work' => 108,
+        'diet' => 334,
+    ];
+
+    foreach ($field_id_map as $param => $id) {
+        $val = $$param; // get variable by name
+        if ($val) {
+             $xprofile_query[] = [
+                'field' => $id,
+                'value' => $val,
+                'compare' => '=', // Exact match
+            ];
+        }
+    }
+
+    if (count($xprofile_query) > 1) {
+        $args['xprofile_query'] = $xprofile_query;
+    }
+
+    // Run Query
+    if (bp_has_members($args)) {
+        $results = [];
+        while (bp_members()) {
+            bp_the_member();
+            $user_id = bp_get_member_user_id();
+            $user_data = get_userdata($user_id);
+            
+            // Helpers
+            $avatar_url = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]);
+            $attach_id = get_user_meta($user_id, 'user_avatar_id', true);
+            $hires_avatar_large = $attach_id ? wp_get_attachment_image_url($attach_id, 'large') : '';
+            $hires_avatar_full = $attach_id ? wp_get_attachment_image_url($attach_id, 'full') : '';
+            
+            // XProfile Data
+            $age = bp_get_member_profile_data('field=Data urodzenia');
+            if ($age) {
+                 // Calculate age from date
+                 $age = date_diff(date_create($age), date_create('today'))->y;
+            }
+            
+            // Filter by age explicitly here if query didn't handle it
+            // (Note: this breaks pagination count, but is a safe fallback for display)
+            if ($min_age && $age < $min_age) continue;
+            if ($max_age && $age > $max_age) continue;
+
+            $zodiac = bp_get_member_profile_data('field=Znak zodiaku');
+            $faith_val = bp_get_member_profile_data('field=Podejście do wiary'); // using name just to be safe/readable
+            $politics_val = bp_get_member_profile_data('field=Poglądy Polityczne');
+            $work_val = bp_get_member_profile_data('field=Styl Pracy');
+            $diet_val = bp_get_member_profile_data('field=Styl jedzenia');
+            $bio = bp_get_member_profile_data('field=O mnie');
+
+            if ($has_bio === 'true' && empty($bio)) continue;
+
+
+            $results[] = [
+                'id' => $user_id,
+                'name' => $user_data->display_name,
+                'mention_name' => $user_data->user_nicename,
+                'avatar_urls' => ['full' => $avatar_url],
+                'hires_avatar' => ['large' => $hires_avatar_large, 'full' => $hires_avatar_full],
+                'last_activity' => bp_get_member_last_active(),
+                'age' => $age,
+                'zodiac' => $zodiac,
+                'faith' => $faith_val,
+                'politics' => $politics_val,
+                'work' => $work_val,
+                'diet' => $diet_val,
+                // 'bio' => $bio // Don't send full bio unless needed for list? Not needed for filters. 
+            ];
+        }
+        return rest_ensure_response($results);
+    }
+
+    return rest_ensure_response([]);
 }
 
 // ========================================
@@ -7975,7 +8373,7 @@ function pm_mobile_member_tabs() {
     <div class="pm-filter-panel" id="pm-filter-panel">
         <div class="pm-filter-header">
             <h3>Ustawienia wyszukiwania</h3>
-            <button class="pm-filter-done" id="pm-filter-done" onclick="document.getElementById('pm-filter-panel').classList.remove('active');document.getElementById('pm-filter-overlay').classList.remove('active');document.body.style.overflow='';var f={ageMin:document.getElementById('pm-age-min').value,ageMax:document.getElementById('pm-age-max').value,hasBio:document.getElementById('pm-has-bio')?.checked||false};localStorage.setItem('pmFilters',JSON.stringify(f));window.dispatchEvent(new CustomEvent('pmReloadTab'));">Gotowe</button>
+            <button class="pm-filter-done" id="pm-filter-done" onclick="document.getElementById('pm-filter-panel').classList.remove('active');document.getElementById('pm-filter-overlay').classList.remove('active');document.body.style.overflow='';var f={ageMin:document.getElementById('pm-age-min').value,ageMax:document.getElementById('pm-age-max').value,hasBio:document.getElementById('pm-has-bio')?.checked||false, faith:document.getElementById('pm-filter-faith')?.value||'', politics:document.getElementById('pm-filter-politics')?.value||'', work:document.getElementById('pm-filter-work')?.value||'', diet:document.getElementById('pm-filter-diet')?.value||'', zodiac:document.getElementById('pm-filter-zodiac')?.value||''};localStorage.setItem('pmFilters',JSON.stringify(f));window.dispatchEvent(new CustomEvent('pmReloadTab'));">Gotowe</button>
         </div>
         
         <div class="pm-filter-content">
@@ -8003,61 +8401,115 @@ function pm_mobile_member_tabs() {
             </div>
             
             <!-- Filter List -->
+            <!-- Filter List -->
             <div class="pm-filter-list">
-                <div class="pm-filter-row" data-filter="interests">
-                    <span class="pm-filter-icon">👥</span>
-                    <span class="pm-filter-name">Zainteresowania</span>
-                    <span class="pm-filter-value">Wybierz ></span>
+                <style>
+                    .pm-filter-row select {
+                        background: transparent;
+                        border: none;
+                        color: #fff;
+                        text-align: right;
+                        font-size: 14px;
+                        outline: none;
+                        -webkit-appearance: none;
+                        appearance: none;
+                        padding-right: 15px;
+                        cursor: pointer;
+                    }
+                    .pm-filter-row {
+                        position: relative;
+                    }
+                    .pm-filter-value {
+                    display: flex;
+                    align-items: center;
+                    justify-content: flex-end;
+                }
+                .pm-filter-value::after {
+                    content: '\25BC'; /* Down arrow */
+                    font-size: 10px;
+                    margin-left: 8px;
+                    opacity: 0.7;
+                    pointer-events: none;
+                }    }
+                </style>
+                
+                <div class="pm-filter-row">
+                    <span class="pm-filter-icon">🛐</span>
+                    <span class="pm-filter-name">Religia</span>
+                    <span class="pm-filter-value">
+                        <select id="pm-filter-faith">
+                            <option value="">Wszystkie</option>
+                            <option value="Wierzący">Wierzący</option>
+                            <option value="Ateista">Ateista</option>
+                            <option value="Duchowy">Duchowy</option>
+                            <option value="Inne">Inne</option>
+                        </select>
+                    </span>
                 </div>
-                <div class="pm-filter-row" data-filter="looking-for">
-                    <span class="pm-filter-icon">💑</span>
-                    <span class="pm-filter-name">Czego szukasz</span>
-                    <span class="pm-filter-value">Wybierz ></span>
+
+                <div class="pm-filter-row">
+                    <span class="pm-filter-icon">⚖️</span>
+                    <span class="pm-filter-name">Poglądy</span>
+                    <span class="pm-filter-value">
+                        <select id="pm-filter-politics">
+                            <option value="">Wszystkie</option>
+                            <option value="Konserwatywne">Konserwatywne</option>
+                            <option value="Liberalne">Liberalne</option>
+                            <option value="Centrowe">Centrowe</option>
+                            <option value="Apolityczny">Apolityczny</option>
+                        </select>
+                    </span>
                 </div>
-                <div class="pm-filter-row" data-filter="languages">
-                    <span class="pm-filter-icon">🌐</span>
-                    <span class="pm-filter-name">Języki</span>
-                    <span class="pm-filter-value">Wybierz ></span>
+
+                <div class="pm-filter-row">
+                    <span class="pm-filter-icon">💼</span>
+                    <span class="pm-filter-name">Praca</span>
+                    <span class="pm-filter-value">
+                        <select id="pm-filter-work">
+                            <option value="">Wszystkie</option>
+                            <option value="Korporacja">Korporacja</option>
+                            <option value="Własny Biznes">Własny Biznes</option>
+                            <option value="Normalna Praca">Normalna Praca</option>
+                            <option value="Praca Kreatywna">Praca Kreatywna</option>
+                            <option value="Nie pracuję">Nie pracuję</option>
+                        </select>
+                    </span>
                 </div>
-                <div class="pm-filter-row" data-filter="zodiac">
+
+                <div class="pm-filter-row">
+                    <span class="pm-filter-icon">🥗</span>
+                    <span class="pm-filter-name">Dieta</span>
+                    <span class="pm-filter-value">
+                        <select id="pm-filter-diet">
+                            <option value="">Wszystkie</option>
+                            <option value="Wszystkożerca">Wszystkożerca</option>
+                            <option value="Wegetarianin">Wegetarianin</option>
+                            <option value="Weganin">Weganin</option>
+                            <option value="Keto/Inne">Keto/Inne</option>
+                        </select>
+                    </span>
+                </div>
+                
+                <div class="pm-filter-row">
                     <span class="pm-filter-icon">♈</span>
                     <span class="pm-filter-name">Znak zodiaku</span>
-                    <span class="pm-filter-value">Wybierz ></span>
-                </div>
-                <div class="pm-filter-row" data-filter="education">
-                    <span class="pm-filter-icon">🎓</span>
-                    <span class="pm-filter-name">Wykształcenie</span>
-                    <span class="pm-filter-value">Wybierz ></span>
-                </div>
-                <div class="pm-filter-row" data-filter="family-plans">
-                    <span class="pm-filter-icon">👶</span>
-                    <span class="pm-filter-name">Plany rodzinne</span>
-                    <span class="pm-filter-value">Wybierz ></span>
-                </div>
-                <div class="pm-filter-row" data-filter="communication">
-                    <span class="pm-filter-icon">💬</span>
-                    <span class="pm-filter-name">Styl komunikacji</span>
-                    <span class="pm-filter-value">Wybierz ></span>
-                </div>
-                <div class="pm-filter-row" data-filter="love-style">
-                    <span class="pm-filter-icon">❤️</span>
-                    <span class="pm-filter-name">Styl miłości</span>
-                    <span class="pm-filter-value">Wybierz ></span>
-                </div>
-                <div class="pm-filter-row" data-filter="pets">
-                    <span class="pm-filter-icon">🐾</span>
-                    <span class="pm-filter-name">Zwierzęta</span>
-                    <span class="pm-filter-value">Wybierz ></span>
-                </div>
-                <div class="pm-filter-row" data-filter="drinking">
-                    <span class="pm-filter-icon">🍷</span>
-                    <span class="pm-filter-name">Alkohol</span>
-                    <span class="pm-filter-value">Wybierz ></span>
-                </div>
-                <div class="pm-filter-row" data-filter="smoking">
-                    <span class="pm-filter-icon">🚬</span>
-                    <span class="pm-filter-name">Palenie</span>
-                    <span class="pm-filter-value">Wybierz ></span>
+                    <span class="pm-filter-value">
+                        <select id="pm-filter-zodiac">
+                            <option value="">Wszystkie</option>
+                            <option value="Baran">Baran</option>
+                            <option value="Byk">Byk</option>
+                            <option value="Bliźnięta">Bliźnięta</option>
+                            <option value="Rak">Rak</option>
+                            <option value="Lew">Lew</option>
+                            <option value="Panna">Panna</option>
+                            <option value="Waga">Waga</option>
+                            <option value="Skorpion">Skorpion</option>
+                            <option value="Strzelec">Strzelec</option>
+                            <option value="Koziorożec">Koziorożec</option>
+                            <option value="Wodnik">Wodnik</option>
+                            <option value="Ryby">Ryby</option>
+                        </select>
+                    </span>
                 </div>
             </div>
         </div>
@@ -8665,7 +9117,7 @@ function pm_mobile_member_tabs() {
                 case 'liked': return base + 'liked';
                 case 'likes-me': return base + 'likes-me';
                 case 'matches': return base + 'matches';
-                default: return base + 'liked';
+                default: return base + 'members';
             }
         }
         
@@ -8692,6 +9144,7 @@ function pm_mobile_member_tabs() {
                 const avatar = member.hires_avatar?.large || member.hires_avatar?.full || member.avatar_urls?.full || member.avatar || '';
                 const name = member.name || member.display_name || 'Użytkownik';
                 const age = member.age || '';
+                const zodiac = member.zodiac || '';
                 const url = member.link || member.profile_url || '/members/' + (member.user_nicename || member.id);
                 
                 html += `
@@ -8701,7 +9154,10 @@ function pm_mobile_member_tabs() {
                         </a>
                         <div class="pm-tab-card-info">
                             <h4 class="pm-tab-card-name">${name}</h4>
-                            ${age ? `<span class="pm-tab-card-age">${age} lat</span>` : ''}
+                            <div style="font-size:12px;opacity:0.8;margin-bottom:4px;">
+                                ${age ? `<span class="pm-tab-card-age">${age} lat</span>` : ''}
+                                ${zodiac ? ` &bull; ${zodiac}` : ''}
+                            </div>
                             <div class="pm-tab-card-actions">
                                 <a href="${url}" class="pm-tab-card-btn profile">Profil</a>
                                 <a href="${member.thread_id ? '<?php echo esc_url(trailingslashit($user_profile_url) . (function_exists("bp_get_messages_slug") ? bp_get_messages_slug() : "messages")); ?>/view/' + member.thread_id + '/' : '<?php echo esc_url(trailingslashit($user_profile_url) . (function_exists("bp_get_messages_slug") ? bp_get_messages_slug() : "messages")); ?>/compose/?r=' + encodeURIComponent(member.login || member.mention_name || member.name)}" class="pm-tab-card-btn message">💬</a>
@@ -8713,6 +9169,66 @@ function pm_mobile_member_tabs() {
             html += '</div>';
             content.innerHTML = html;
         }
+        
+        // Load saved filters from localStorage on page init
+        function loadFilters() {
+            try {
+                const saved = localStorage.getItem('pmFilters');
+                if (saved) {
+                    const filters = JSON.parse(saved);
+                    
+                    // Update age min slider
+                    const ageMinEl = document.getElementById('pm-age-min');
+                    const ageMaxEl = document.getElementById('pm-age-max');
+                    const ageMinValEl = document.getElementById('pm-age-min-val');
+                    const ageMaxValEl = document.getElementById('pm-age-max-val');
+                    const ageFillEl = document.getElementById('pm-age-fill');
+                    const hasBioEl = document.getElementById('pm-has-bio');
+                    
+                    if (ageMinEl && filters.ageMin) {
+                        ageMinEl.value = filters.ageMin;
+                        if (ageMinValEl) ageMinValEl.textContent = filters.ageMin;
+                    }
+                    
+                    if (ageMaxEl && filters.ageMax) {
+                        ageMaxEl.value = filters.ageMax;
+                        if (ageMaxValEl) {
+                            ageMaxValEl.textContent = filters.ageMax >= 65 ? '65+' : filters.ageMax;
+                        }
+                    }
+                    
+                    // Update the range fill
+                    if (ageFillEl && filters.ageMin && filters.ageMax) {
+                        const minVal = parseInt(filters.ageMin);
+                        const maxVal = parseInt(filters.ageMax);
+                        const left = ((minVal - 18) / 47) * 100;
+                        const right = ((maxVal - 18) / 47) * 100;
+                        ageFillEl.style.left = left + '%';
+                        ageFillEl.style.width = (right - left) + '%';
+                    }
+                    
+                    // Update has bio checkbox
+                    if (hasBioEl && typeof filters.hasBio !== 'undefined') {
+                        hasBioEl.checked = filters.hasBio;
+                    }
+
+                    // Update New Filters
+                    ['faith', 'politics', 'work', 'diet', 'zodiac'].forEach(key => {
+                        const el = document.getElementById('pm-filter-' + key);
+                        if (el && filters[key]) {
+                            el.value = filters[key];
+                        }
+                    });
+                    
+                    console.log('Filters loaded from localStorage:', filters);
+                }
+            } catch (e) {
+                console.error('Error loading filters:', e);
+            }
+        }
+        
+        // Load filters on page init
+        loadFilters();
     });
     </script>
     
