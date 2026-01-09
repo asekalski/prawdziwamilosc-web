@@ -7925,7 +7925,19 @@ function pm_mobile_member_tabs() {
     <!-- Mobile Header Bar -->
     <div class="pm-mobile-header" id="pm-mobile-header">
         <div class="pm-mh-left">
-            <button class="pm-mh-btn pm-filter-btn" id="pm-filter-toggle">🔍</button>
+            <div class="pm-mh-btn pm-filter-btn" id="pm-filter-toggle" role="button" tabindex="0" onclick="document.getElementById('pm-filter-panel').classList.add('active');document.getElementById('pm-filter-overlay').classList.add('active');document.body.style.overflow='hidden';">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="4" y1="21" x2="4" y2="14"></line>
+                    <line x1="4" y1="10" x2="4" y2="3"></line>
+                    <line x1="12" y1="21" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12" y2="3"></line>
+                    <line x1="20" y1="21" x2="20" y2="16"></line>
+                    <line x1="20" y1="12" x2="20" y2="3"></line>
+                    <line x1="1" y1="14" x2="7" y2="14"></line>
+                    <line x1="9" y1="8" x2="15" y2="8"></line>
+                    <line x1="17" y1="16" x2="23" y2="16"></line>
+                </svg>
+            </div>
         </div>
         <div class="pm-mh-right">
             <a href="<?php echo esc_url($messages_url); ?>" class="pm-mh-btn pm-notif-btn">
@@ -7956,6 +7968,101 @@ function pm_mobile_member_tabs() {
     
     <div id="pm-tabs-content"></div>
     
+    <!-- Filter Panel Overlay -->
+    <div class="pm-filter-overlay" id="pm-filter-overlay" onclick="document.getElementById('pm-filter-panel').classList.remove('active');this.classList.remove('active');document.body.style.overflow='';"></div>
+    
+    <!-- Filter Panel -->
+    <div class="pm-filter-panel" id="pm-filter-panel">
+        <div class="pm-filter-header">
+            <h3>Ustawienia wyszukiwania</h3>
+            <button class="pm-filter-done" id="pm-filter-done" onclick="document.getElementById('pm-filter-panel').classList.remove('active');document.getElementById('pm-filter-overlay').classList.remove('active');document.body.style.overflow='';var f={ageMin:document.getElementById('pm-age-min').value,ageMax:document.getElementById('pm-age-max').value,hasBio:document.getElementById('pm-has-bio')?.checked||false};localStorage.setItem('pmFilters',JSON.stringify(f));window.dispatchEvent(new CustomEvent('pmReloadTab'));">Gotowe</button>
+        </div>
+        
+        <div class="pm-filter-content">
+            <!-- Age Range Slider -->
+            <div class="pm-filter-section pm-age-section">
+                <label class="pm-filter-label">Zakres wiekowy</label>
+                <div class="pm-age-slider-container">
+                    <input type="range" id="pm-age-min" class="pm-age-range" min="18" max="65" value="18" oninput="var mn=parseInt(this.value),mx=parseInt(document.getElementById('pm-age-max').value);if(mn>=mx){this.value=mx-1;mn=mx-1;}document.getElementById('pm-age-min-val').textContent=mn;var l=((mn-18)/47)*100,r=((mx-18)/47)*100;document.getElementById('pm-age-fill').style.left=l+'%';document.getElementById('pm-age-fill').style.width=(r-l)+'%';">
+                    <input type="range" id="pm-age-max" class="pm-age-range" min="18" max="65" value="65" oninput="var mx=parseInt(this.value),mn=parseInt(document.getElementById('pm-age-min').value);if(mx<=mn){this.value=mn+1;mx=mn+1;}document.getElementById('pm-age-max-val').textContent=mx>=65?'65+':mx;var l=((mn-18)/47)*100,r=((mx-18)/47)*100;document.getElementById('pm-age-fill').style.left=l+'%';document.getElementById('pm-age-fill').style.width=(r-l)+'%';">
+                    <div class="pm-age-track"></div>
+                    <div class="pm-age-range-fill" id="pm-age-fill"></div>
+                </div>
+                <div class="pm-age-values">
+                    <span id="pm-age-min-val">18</span> - <span id="pm-age-max-val">65+</span>
+                </div>
+            </div>
+            
+            <!-- Has Bio Toggle -->
+            <div class="pm-filter-row pm-toggle-row">
+                <span class="pm-filter-name">Ma bio</span>
+                <label class="pm-toggle">
+                    <input type="checkbox" id="pm-has-bio">
+                    <span class="pm-toggle-slider"></span>
+                </label>
+            </div>
+            
+            <!-- Filter List -->
+            <div class="pm-filter-list">
+                <div class="pm-filter-row" data-filter="interests">
+                    <span class="pm-filter-icon">👥</span>
+                    <span class="pm-filter-name">Zainteresowania</span>
+                    <span class="pm-filter-value">Wybierz ></span>
+                </div>
+                <div class="pm-filter-row" data-filter="looking-for">
+                    <span class="pm-filter-icon">💑</span>
+                    <span class="pm-filter-name">Czego szukasz</span>
+                    <span class="pm-filter-value">Wybierz ></span>
+                </div>
+                <div class="pm-filter-row" data-filter="languages">
+                    <span class="pm-filter-icon">🌐</span>
+                    <span class="pm-filter-name">Języki</span>
+                    <span class="pm-filter-value">Wybierz ></span>
+                </div>
+                <div class="pm-filter-row" data-filter="zodiac">
+                    <span class="pm-filter-icon">♈</span>
+                    <span class="pm-filter-name">Znak zodiaku</span>
+                    <span class="pm-filter-value">Wybierz ></span>
+                </div>
+                <div class="pm-filter-row" data-filter="education">
+                    <span class="pm-filter-icon">🎓</span>
+                    <span class="pm-filter-name">Wykształcenie</span>
+                    <span class="pm-filter-value">Wybierz ></span>
+                </div>
+                <div class="pm-filter-row" data-filter="family-plans">
+                    <span class="pm-filter-icon">👶</span>
+                    <span class="pm-filter-name">Plany rodzinne</span>
+                    <span class="pm-filter-value">Wybierz ></span>
+                </div>
+                <div class="pm-filter-row" data-filter="communication">
+                    <span class="pm-filter-icon">💬</span>
+                    <span class="pm-filter-name">Styl komunikacji</span>
+                    <span class="pm-filter-value">Wybierz ></span>
+                </div>
+                <div class="pm-filter-row" data-filter="love-style">
+                    <span class="pm-filter-icon">❤️</span>
+                    <span class="pm-filter-name">Styl miłości</span>
+                    <span class="pm-filter-value">Wybierz ></span>
+                </div>
+                <div class="pm-filter-row" data-filter="pets">
+                    <span class="pm-filter-icon">🐾</span>
+                    <span class="pm-filter-name">Zwierzęta</span>
+                    <span class="pm-filter-value">Wybierz ></span>
+                </div>
+                <div class="pm-filter-row" data-filter="drinking">
+                    <span class="pm-filter-icon">🍷</span>
+                    <span class="pm-filter-name">Alkohol</span>
+                    <span class="pm-filter-value">Wybierz ></span>
+                </div>
+                <div class="pm-filter-row" data-filter="smoking">
+                    <span class="pm-filter-icon">🚬</span>
+                    <span class="pm-filter-name">Palenie</span>
+                    <span class="pm-filter-value">Wybierz ></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <style>
     /* Mobile Header Bar - visible only on mobile */
     .pm-mobile-header {
@@ -8238,6 +8345,227 @@ function pm_mobile_member_tabs() {
         height: 64px;
         opacity: 0.3;
         margin-bottom: 15px;
+    }
+    
+    /* Filter Panel Overlay */
+    .pm-filter-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.6);
+        z-index: 199;
+    }
+    
+    .pm-filter-overlay.active {
+        display: block;
+    }
+    
+    /* Filter Panel */
+    .pm-filter-panel {
+        position: fixed;
+        top: 0;
+        left: -100%;
+        width: 85%;
+        max-width: 360px;
+        height: 100%;
+        background: linear-gradient(180deg, #1a1a2e 0%, #0f0f1a 100%);
+        z-index: 200;
+        transition: left 0.3s ease;
+        overflow-y: auto;
+        padding-bottom: 40px;
+    }
+    
+    .pm-filter-panel.active {
+        left: 0;
+    }
+    
+    .pm-filter-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px 16px;
+        padding-top: calc(env(safe-area-inset-top, 0) + 20px);
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .pm-filter-header h3 {
+        margin: 0;
+        color: #fff;
+        font-size: 18px;
+        font-weight: 600;
+    }
+    
+    .pm-filter-done {
+        background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 100%);
+        color: #fff;
+        border: none;
+        padding: 10px 24px;
+        border-radius: 20px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    
+    .pm-filter-content {
+        padding: 16px;
+    }
+    
+    /* Age Section */
+    .pm-filter-section {
+        margin-bottom: 24px;
+    }
+    
+    .pm-filter-label {
+        display: block;
+        color: #fff;
+        font-size: 15px;
+        font-weight: 500;
+        margin-bottom: 16px;
+    }
+    
+    .pm-age-slider-container {
+        position: relative;
+        height: 40px;
+        margin-bottom: 8px;
+    }
+    
+    .pm-age-range {
+        position: absolute;
+        width: 100%;
+        height: 6px;
+        top: 50%;
+        transform: translateY(-50%);
+        -webkit-appearance: none;
+        appearance: none;
+        background: transparent;
+        pointer-events: none;
+        z-index: 2;
+    }
+    
+    .pm-age-range::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 24px;
+        height: 24px;
+        background: #ec4899;
+        border-radius: 50%;
+        cursor: pointer;
+        pointer-events: auto;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    }
+    
+    .pm-age-track {
+        position: absolute;
+        width: 100%;
+        height: 6px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: rgba(255,255,255,0.2);
+        border-radius: 3px;
+    }
+    
+    .pm-age-range-fill {
+        position: absolute;
+        height: 6px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: linear-gradient(90deg, #ec4899, #8b5cf6);
+        border-radius: 3px;
+        left: 0%;
+        width: 100%;
+    }
+    
+    .pm-age-values {
+        text-align: center;
+        color: #fff;
+        font-size: 16px;
+        font-weight: 500;
+    }
+    
+    /* Toggle */
+    .pm-toggle-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 16px 0;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .pm-toggle {
+        position: relative;
+        display: inline-block;
+        width: 50px;
+        height: 28px;
+    }
+    
+    .pm-toggle input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+    
+    .pm-toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255,255,255,0.2);
+        transition: 0.3s;
+        border-radius: 28px;
+    }
+    
+    .pm-toggle-slider:before {
+        position: absolute;
+        content: "";
+        height: 22px;
+        width: 22px;
+        left: 3px;
+        bottom: 3px;
+        background: #fff;
+        transition: 0.3s;
+        border-radius: 50%;
+    }
+    
+    .pm-toggle input:checked + .pm-toggle-slider {
+        background: linear-gradient(90deg, #ec4899, #8b5cf6);
+    }
+    
+    .pm-toggle input:checked + .pm-toggle-slider:before {
+        transform: translateX(22px);
+    }
+    
+    /* Filter List */
+    .pm-filter-list {
+        margin-top: 16px;
+    }
+    
+    .pm-filter-row {
+        display: flex;
+        align-items: center;
+        padding: 14px 0;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        color: #fff;
+    }
+    
+    .pm-filter-icon {
+        font-size: 20px;
+        margin-right: 12px;
+    }
+    
+    .pm-filter-name {
+        flex: 1;
+        font-size: 15px;
+        color: #fff;
+    }
+    
+    .pm-filter-value {
+        color: rgba(255,255,255,0.5);
+        font-size: 14px;
     }
     </style>
     
