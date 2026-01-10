@@ -7664,9 +7664,11 @@ function sk_get_members_endpoint($request) {
             }
             
             // Filter by age explicitly here if query didn't handle it
-            // (Note: this breaks pagination count, but is a safe fallback for display)
-            if ($min_age && $age < $min_age) continue;
-            if ($max_age && $age > $max_age) continue;
+            // Only filter if age is actually known
+            if ($age) {
+                if ($min_age && $age < $min_age) continue;
+                if ($max_age && $age > $max_age) continue;
+            }
 
             $zodiac = bp_get_member_profile_data('field=Znak zodiaku');
             $faith_val = bp_get_member_profile_data('field=Podejście do wiary'); // using name just to be safe/readable
