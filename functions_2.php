@@ -7680,13 +7680,28 @@ function sk_get_members_endpoint($request) {
             if ($has_bio === 'true' && empty($bio)) continue;
 
 
+            // Get last activity properly
+            $last_active_raw = bp_get_user_last_activity($user_id);
+            $last_activity_formatted = '';
+            if ($last_active_raw) {
+                $last_activity_formatted = 'Aktywny/a ' . bp_core_time_since($last_active_raw);
+            } else {
+                // Try to get from user registration date as fallback
+                $registered = $user_data->user_registered;
+                if ($registered) {
+                    $last_activity_formatted = 'Zarejestrowany/a ' . bp_core_time_since($registered);
+                } else {
+                    $last_activity_formatted = 'Aktywność nieznana';
+                }
+            }
+
             $results[] = [
                 'id' => $user_id,
                 'name' => $user_data->display_name,
                 'mention_name' => $user_data->user_nicename,
                 'avatar_urls' => ['full' => $avatar_url],
                 'hires_avatar' => ['large' => $hires_avatar_large, 'full' => $hires_avatar_full],
-                'last_activity' => bp_get_member_last_active(),
+                'last_activity' => $last_activity_formatted,
                 'age' => $age,
                 'zodiac' => $zodiac,
                 'faith' => $faith_val,
