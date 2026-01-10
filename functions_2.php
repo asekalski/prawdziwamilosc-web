@@ -7551,7 +7551,7 @@ function sk_get_members_endpoint($request) {
         'page' => $page,
         'per_page' => $per_page,
         'search_terms' => $search,
-        'type' => 'active', // Sort by last active
+        'type' => 'alphabetical', // Show ALL members, not just recently active
         'populate_extras' => false, // We'll fetch custom data
     ];
 
