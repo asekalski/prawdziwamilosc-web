@@ -10180,29 +10180,6 @@ function hook_bp_avatar_quality_boost($html, $params, $item_id, $avatar_dir, $cs
 }
 add_filter('bp_core_fetch_avatar', 'hook_bp_avatar_quality_boost', 20, 9);
 
-// ========================================
-// PM Premium: Boost Web Avatar URL Quality (For JS/CSS consumers)
-// ========================================
-function hook_bp_avatar_url_quality_boost($url, $item_id, $object, $type, $avatar_dir, $avatar_folder_url, $avatar_folder_dir, $email) {
-    
-    // Default object is 'user' if not specified, but usually it is passed.
-    if ( $object !== 'user' && $object !== 'member' ) {
-         // sometimes it might be 'member' depending on call context, though 'user' is standard BP
-         if ($object && $object !== 'user') return $url;
-    }
 
-    $attach_id = get_user_meta($item_id, 'user_avatar_id', true);
-    if ( $attach_id ) {
-        $hires_url = wp_get_attachment_image_url($attach_id, 'large');
-        if ( ! $hires_url ) {
-            $hires_url = wp_get_attachment_image_url($attach_id, 'full');
-        }
-        if ( $hires_url ) {
-            return $hires_url;
-        }
-    }
-    return $url;
-}
-add_filter('bp_core_fetch_avatar_url', 'hook_bp_avatar_url_quality_boost', 20, 8);
 
 
