@@ -8446,7 +8446,7 @@ function pm_mobile_member_tabs() {
             <div class="pm-filter-row pm-toggle-row">
                 <span class="pm-filter-name">Pokaż Numerologię</span>
                 <label class="pm-toggle">
-                    <input type="checkbox" id="pm-show-numerology" onchange="document.body.classList.toggle('show-numerology', this.checked);">
+                    <input type="checkbox" id="pm-show-numerology" onchange="document.body.classList.toggle('show-numerology', this.checked); localStorage.setItem('pmShowNumerology', this.checked);">
                     <span class="pm-toggle-slider"></span>
                 </label>
             </div>
@@ -9074,6 +9074,14 @@ function pm_mobile_member_tabs() {
     
     <script>
     document.addEventListener('DOMContentLoaded', function() {
+        // Restore numerology toggle state from localStorage
+        const savedNumerology = localStorage.getItem('pmShowNumerology');
+        if (savedNumerology === 'true') {
+            document.body.classList.add('show-numerology');
+            const checkbox = document.getElementById('pm-show-numerology');
+            if (checkbox) checkbox.checked = true;
+        }
+        
         const tabsContainer = document.getElementById('pm-member-tabs');
         const loader = document.getElementById('pm-tabs-loader');
         const content = document.getElementById('pm-tabs-content');
