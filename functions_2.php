@@ -9691,75 +9691,96 @@ function hook_premium_profile_css() {
     if ( function_exists('is_buddypress') && is_buddypress() ) {
         ?>
         <style type="text/css">
-            /* --- PM Premium Theme V6: Functionality & Width Fix --- */
+            /* --- PM Premium Theme V8: Dark Matter & High Contrast --- */
             :root {
                 --pm-gold: #d4af37;
                 --pm-dark-bg: #121212;
                 --pm-card-bg: #1e1e1e;
                 --pm-input-bg: #2a2a2a;
                 --pm-text-main: #ffffff;
-                --pm-text-muted: #888888;
+                --pm-text-muted: #aaaaaa;
                 --pm-border: #444;
             }
 
-            /* --- GLOBAL WIDTH RESET --- */
+            /* --- GLOBAL DARK ENFORCER --- */
+            /* Force the entire page background to be dark first */
+            html, body, #page, .site-content {
+                background-color: var(--pm-dark-bg) !important;
+                color: var(--pm-text-main) !important;
+            }
+
+            /* --- FORCE ALL PARENTS TO FULL WIDTH (MOBILE FIX) --- */
+            body.buddypress,
+            body.buddypress .site,
             body.buddypress .site-content,
             body.buddypress .entry-content,
             body.buddypress .container,
             body.buddypress #content,
             body.buddypress div#primary,
-            body.buddypress article {
-                max-width: 100% !important;
+            body.buddypress article,
+            body.buddypress .hentry,
+            body.buddypress main {
                 width: 100% !important;
-                padding: 0 !important;
-                margin: 0 !important;
+                max-width: 100% !important;
+                padding-left: 0 !important;
+                padding-right: 0 !important;
+                margin-left: 0 !important;
+                margin-right: 0 !important;
+                overflow-x: hidden !important;
             }
 
-            /* --- MAIN WRAPPER --- */
+            /* --- MAIN BUDDYPRESS CONTAINER --- */
             body.buddypress #buddypress {
                 width: 100% !important;
+                max-width: 100% !important;
                 margin: 0 !important;
-                padding: 10px !important;
+                padding: 10px !important; /* Minimal safety padding */
                 background: var(--pm-dark-bg) !important;
                 box-sizing: border-box !important;
             }
 
-            /* --- STRIP INTERIOR CONTAINERS --- */
-            /* Remove 'card' styling from everything inside the form to fix the 'narrow box' look */
+            /* --- KILL ALL LIGHT BACKGROUNDS --- */
+            /* Targeting every possible container that could have a light background */
             #buddypress #profile-edit-form,
-            #buddypress form, 
-            #buddypress fieldset,
             #buddypress .profile,
-            #buddypress .bp-profile-edit {
-                background: transparent !important;
+            #buddypress .editfield,
+            #buddypress fieldset,
+            #buddypress div.field-group,
+            #buddypress .bp-profile-edit,
+            #buddypress table,
+            #buddypress tr,
+            #buddypress td,
+            #buddypress .standard-form,
+            #buddypress .odd,
+            #buddypress .even,
+            #buddypress .alt,
+            #buddypress div {
+                background-color: transparent !important;
+                background-image: none !important;
                 border: none !important;
                 box-shadow: none !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                width: 100% !important;
-                max-width: 100% !important;
+                border-radius: 0 !important;
             }
 
-            /* --- HEADINGS --- */
+            /* --- HEADINGS & LEGENDS --- */
+            /* Ensure they are visible and gold */
             #buddypress h4, 
-            #buddypress legend {
+            #buddypress legend,
+            #buddypress .label {
                 color: var(--pm-gold) !important;
-                font-size: 1.1rem !important;
-                font-weight: 700 !important;
-                margin: 20px 0 10px 0 !important;
+                font-size: 1.2rem !important;
+                font-weight: 800 !important;
+                margin: 30px 0 15px 0 !important;
                 text-transform: uppercase !important;
-                border: none !important;
+                border-bottom: 2px solid #333 !important;
+                padding-bottom: 5px !important;
                 width: 100% !important;
+                display: block !important;
                 background: transparent !important;
+                text-shadow: none !important;
             }
 
-            /* --- FORM FIELDS --- */
-            #buddypress .editfield {
-                margin-bottom: 25px !important;
-                width: 100% !important;
-                clear: both !important;
-            }
-
+            /* --- LABELS --- */
             #buddypress label {
                 display: block !important;
                 color: var(--pm-text-muted) !important;
@@ -9767,6 +9788,15 @@ function hook_premium_profile_css() {
                 margin-bottom: 8px !important;
                 font-weight: 600 !important;
                 text-transform: uppercase !important;
+                background: transparent !important;
+            }
+
+            /* --- FORM FIELDS CONTAINER --- */
+            #buddypress .editfield {
+                margin-bottom: 30px !important;
+                width: 100% !important;
+                clear: both !important;
+                padding: 0 !important;
             }
 
             /* --- INPUTS --- */
@@ -9777,139 +9807,183 @@ function hook_premium_profile_css() {
                 border: 1px solid var(--pm-border) !important;
                 color: #fff !important;
                 border-radius: 8px !important;
-                padding: 14px !important;
+                padding: 16px !important;
                 font-size: 1rem !important;
                 width: 100% !important;
                 box-sizing: border-box !important;
                 height: auto !important;
+                -webkit-appearance: none !important;
             }
             
             #buddypress input:focus, #buddypress select:focus {
                 border-color: var(--pm-gold) !important;
                 outline: none !important;
+                box-shadow: 0 0 10px rgba(212, 175, 55, 0.2) !important;
             }
 
-            /* --- DATE FIELDS: INLINE FLOW --- */
+            /* --- DATE FIELDS --- */
             #buddypress .editfield.datebox {
                 display: flex !important;
                 flex-wrap: nowrap !important;
-                gap: 8px !important;
+                gap: 10px !important;
                 align-items: center !important;
             }
-            #buddypress .editfield.datebox label {
-                display: none !important; /* Hide sub-labels */
-            }
+            #buddypress .editfield.datebox label { display: none !important; }
             #buddypress .editfield.datebox select {
                 flex: 1 !important;
                 text-align: center !important;
                 min-width: 0 !important;
             }
 
+            /* --- RADIO BUTTONS --- */
+            #buddypress .radio label {
+                display: flex !important;
+                align-items: center !important;
+                margin: 0 0 12px 0 !important;
+                color: #fff !important;
+                font-size: 1rem !important;
+                text-transform: none !important;
+                font-weight: 400 !important;
+            }
+            #buddypress .radio input[type="radio"] {
+                width: 24px !important;
+                height: 24px !important;
+                margin-right: 15px !important;
+                accent-color: var(--pm-gold) !important;
+                border: 1px solid #555 !important;
+                background: #2a2a2a !important;
+            }
+
             /* --- TABS --- */
             #buddypress #profile-group-tabs {
                 display: flex !important;
-                gap: 8px !important;
-                padding: 10px 0 !important;
-                margin-bottom: 10px !important;
+                gap: 10px !important;
+                padding: 15px 0 !important;
+                margin-bottom: 20px !important;
                 overflow-x: auto !important;
                 white-space: nowrap !important;
+                width: 100% !important;
             }
             #buddypress #profile-group-tabs li {
                 list-style: none !important;
                 margin: 0 !important;
+                flex: 0 0 auto !important;
             }
             #buddypress #profile-group-tabs li a {
                 display: block !important;
-                padding: 10px 20px !important;
+                padding: 12px 24px !important;
                 background: #333 !important;
-                color: #aaa !important;
-                border-radius: 30px !important;
-                font-size: 0.9rem !important;
+                color: #ccc !important;
+                border-radius: 50px !important;
+                font-size: 0.95rem !important;
                 text-decoration: none !important;
             }
             #buddypress #profile-group-tabs li.current a {
                 background: var(--pm-gold) !important;
                 color: #000 !important;
-                font-weight: bold !important;
+                font-weight: 800 !important;
             }
 
-            /* --- VISIBILITY SETTINGS (Fix) --- */
+           /* --- VISIBILITY SETTINGS (Fix for Desktop & Mobile) --- */
             .field-visibility-settings-toggle {
                 display: block !important;
-                margin-top: 8px !important;
-                font-size: 0.85rem !important;
-                color: #888 !important;
+                margin-top: 10px !important;
+                text-align: right !important;
             }
-            
-            /* Make the link clearly clickable and top-layered */
             .field-visibility-settings-toggle a {
                 color: var(--pm-text-muted) !important;
-                background: rgba(255,255,255,0.05) !important;
-                padding: 4px 10px !important;
-                border-radius: 4px !important;
+                font-size: 0.8rem !important;
                 text-decoration: none !important;
-                margin-left: 8px !important;
-                cursor: pointer !important;
-                position: relative !important;
-                z-index: 9999 !important; /* Force clickability */
-                pointer-events: auto !important;
                 border: 1px solid #444 !important;
+                padding: 6px 12px !important;
+                border-radius: 20px !important;
+                display: inline-block !important;
+                position: relative !important;
+                z-index: 10 !important;
             }
-
-            /* THE CONTAINER */
-            /* We do NOT enforce display: none here. 
-               We rely on BuddyPress JS. If JS fails, it stays visible (safer). */
-            .field-visibility-settings {
-                /* display: none;  <-- REMOVED to verify if JS handles it */
+            
+            /* Container for the visibility options - NEEDS DARK BACKGROUND */
+            body #buddypress .field-visibility-settings,
+            #buddypress .field-visibility-settings {
+                display: block !important;
                 margin-top: 15px !important;
-                background: #1a1a1a !important;
-                padding: 15px !important;
-                border-radius: 8px !important;
-                border: 1px solid var(--pm-gold) !important; /* Visible border for debug */
+                background: #1a1a1a !important; /* Force dark bg */
+                padding: 20px !important;
+                border: 1px solid #444 !important;
+                border-radius: 12px !important;
                 width: 100% !important;
                 box-sizing: border-box !important;
-                position: relative !important; 
-                z-index: 9998 !important;
-            }
-
-            .field-visibility-settings legend { display: none !important; }
-            
-            .field-visibility-settings ul {
-                display: flex !important;
-                flex-direction: column !important;
-                gap: 12px !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                list-style: none !important;
+                color: #fff !important;
+                clear: both !important;
             }
             
-            .field-visibility-settings li {
+            /* Fix invisible headings inside visibility settings */
+            #buddypress .field-visibility-settings legend, 
+            #buddypress .field-visibility-settings h4 {
+                display: block !important;
+                color: var(--pm-gold) !important;
+                margin-bottom: 15px !important;
+                font-size: 1rem !important;
+                border-bottom: 1px solid #333 !important;
+                text-align: left !important;
+                width: 100% !important;
+            }
+            
+            /* Enforce vertical stacking for standard BP structure (radio inputs often direct children or wrapped in labels) */
+            #buddypress .field-visibility-settings label {
                 display: flex !important;
                 align-items: center !important;
-                font-size: 0.95rem !important;
+                width: 100% !important;
+                margin-bottom: 12px !important;
                 color: #fff !important;
+                font-size: 1rem !important;
+                background: transparent !important;
+                text-transform: none !important;
+                font-weight: 400 !important;
             }
             
-            .field-visibility-settings input[type="radio"] {
-                width: 20px !important;
-                height: 20px !important;
-                margin-right: 12px !important;
+            #buddypress .field-visibility-settings input[type="radio"] {
+                width: 24px !important;
+                height: 24px !important;
+                margin-right: 15px !important;
                 accent-color: var(--pm-gold) !important;
+                flex-shrink: 0 !important; /* Prevent squishing */
+                display: inline-block !important;
+            }
+
+            #buddypress .field-visibility-settings .radio {
+                display: block !important;
+                width: 100% !important;
+            }
+
+            /* Handle close button if present */
+            #buddypress .field-visibility-settings .close {
+                display: inline-block !important;
+                margin-top: 15px !important;
+                padding: 8px 16px !important;
+                background: #333 !important;
+                color: #fff !important;
+                border-radius: 4px !important;
+                text-decoration: none !important;
+                cursor: pointer !important;
+                border: 1px solid #555 !important;
             }
 
             /* --- SUBMIT --- */
             #buddypress .submit input {
                 width: 100% !important;
-                padding: 16px !important;
-                background: var(--pm-gold) !important;
+                padding: 20px !important;
+                background: linear-gradient(135deg, #d4af37 0%, #aa8c2c 100%) !important;
                 color: #000 !important;
                 font-weight: 800 !important;
                 text-transform: uppercase !important;
                 border: none !important;
-                border-radius: 8px !important;
-                margin-top: 20px !important;
-                font-size: 1rem !important;
+                border-radius: 50px !important;
+                margin-top: 40px !important;
+                font-size: 1.2rem !important;
+                letter-spacing: 1px !important;
                 cursor: pointer !important;
+                box-shadow: 0 4px 15px rgba(212, 175, 55, 0.3) !important;
             }
         </style>
         <?php
