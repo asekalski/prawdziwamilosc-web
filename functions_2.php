@@ -9176,45 +9176,64 @@ function pm_mobile_member_tabs() {
             if (targetTab) targetTab.classList.add('active');
             currentTab = tabId;
             
-            // Show/hide content based on tab
-            if (tabId === 'search') {
-                // Show original BuddyPress content
-                loader.style.display = 'none';
-                content.style.display = 'none';
-                if (originalContent) originalContent.style.display = '';
-                document.body.classList.remove('pm-tabs-active');
-            } else {
-                // Load AJAX content
-                if (originalContent) originalContent.style.display = 'none';
-                content.style.display = 'block';
-                loader.style.display = 'block';
-                document.body.classList.add('pm-tabs-active');
+            // ALL tabs now use AJAX for consistent HiRes images
+            if (originalContent) originalContent.style.display = 'none';
+            content.style.display = 'block';
+            loader.style.display = 'block';
+            document.body.classList.add('pm-tabs-active');
+            
+            try {
+                // Build endpoint with filters for search tab
+                let endpoint = getEndpoint(tabId);
                 
-                try {
-                    const endpoint = getEndpoint(tabId);
-                    const response = await fetch(endpoint, {
-                        credentials: 'same-origin',
-                        headers: {
-                            'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>'
+                // Add filters to search (members) endpoint
+                if (tabId === 'search') {
+                    try {
+                        const saved = localStorage.getItem('pmFilters');
+                        if (saved) {
+                            const filters = JSON.parse(saved);
+                            const params = new URLSearchParams();
+                            if (filters.ageMin) params.append('min_age', filters.ageMin);
+                            if (filters.ageMax) params.append('max_age', filters.ageMax);
+                            if (filters.hasBio) params.append('has_bio', 'true');
+                            if (filters.faith) params.append('faith', filters.faith);
+                            if (filters.politics) params.append('politics', filters.politics);
+                            if (filters.work) params.append('work', filters.work);
+                            if (filters.diet) params.append('diet', filters.diet);
+                            if (filters.zodiac) params.append('zodiac', filters.zodiac);
+                            if (params.toString()) {
+                                endpoint += '?' + params.toString();
+                            }
                         }
-                    });
-                    
-                    if (!response.ok) throw new Error('API error');
-                    
-                    const data = await response.json();
-                    loader.style.display = 'none';
-                    renderMembers(data, tabId);
-                } catch (error) {
-                    console.error('Tab loading error:', error);
-                    loader.style.display = 'none';
-                    content.innerHTML = '<p style="text-align:center;padding:40px;color:#999;">Nie udało się załadować danych</p>';
+                    } catch(e) { console.error('Filter parse error:', e); }
                 }
+                
+                const response = await fetch(endpoint, {
+                    credentials: 'same-origin',
+                    headers: {
+                        'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>'
+                    }
+                });
+                
+                if (!response.ok) throw new Error('API error');
+                
+                const data = await response.json();
+                loader.style.display = 'none';
+                renderMembers(data, tabId);
+            } catch (error) {
+                console.error('Tab loading error:', error);
+                loader.style.display = 'none';
+                content.innerHTML = '<p style="text-align:center;padding:40px;color:#999;">Nie udało się załadować danych</p>';
             }
         }
         
         // If URL has tab parameter, switch to that tab on load
         if (urlTab && ['search', 'liked', 'likes-me', 'matches'].includes(urlTab)) {
             setTimeout(() => switchToTab(urlTab), 100);
+        } else {
+            // Default: load search via API on page init
+            currentTab = ''; // Reset so switchToTab will run
+            setTimeout(() => switchToTab('search'), 100);
         }
         
         tabs.forEach(tab => {
