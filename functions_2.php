@@ -8857,6 +8857,84 @@ function pm_mobile_member_tabs() {
         color: #fff;
     }
     
+    /* NEW: Swipe Grid - Matches Original BuddyPress Layout */
+    .pm-swipe-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        padding: 0;
+    }
+    
+    .pm-swipe-card {
+        background: #1a1a2e;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .pm-swipe-card-link {
+        display: block;
+    }
+    
+    .pm-swipe-card-image {
+        width: 100%;
+        padding-bottom: 100%; /* 1:1 aspect ratio */
+        background-size: cover;
+        background-position: center;
+        background-color: #2d2d3a;
+    }
+    
+    .pm-swipe-card-content {
+        padding: 15px;
+        background: #1a1a2e;
+    }
+    
+    .pm-swipe-card-name {
+        display: block;
+        color: #3498db;
+        font-size: 18px;
+        font-weight: 600;
+        text-decoration: none;
+        margin-bottom: 5px;
+    }
+    
+    .pm-swipe-card-name:hover {
+        color: #5dade2;
+        text-decoration: none;
+    }
+    
+    .pm-swipe-card-location {
+        color: rgba(255,255,255,0.6);
+        font-size: 14px;
+        margin-bottom: 10px;
+    }
+    
+    .pm-swipe-card-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .pm-member-tag {
+        display: inline-block;
+        padding: 6px 12px;
+        background: rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 20px;
+        color: #fff;
+        font-size: 13px;
+    }
+    
+    .pm-member-tag.pm-tag-numerology {
+        background: linear-gradient(135deg, #f39c12, #f1c40f);
+        border-color: #f39c12;
+        color: #000;
+    }
+    
+    .pm-member-tag.pm-tag-zodiac {
+        background: rgba(155, 89, 182, 0.3);
+        border-color: #9b59b6;
+    }
+    
     .pm-empty-state {
         text-align: center;
         padding: 60px 20px;
@@ -9258,7 +9336,8 @@ function pm_mobile_member_tabs() {
                 const messages = {
                     'liked': 'Nie masz jeszcze polubionych profili',
                     'likes-me': 'Nikt jeszcze nie polubił Twojego profilu',
-                    'matches': 'Nie masz jeszcze żadnych matchy'
+                    'matches': 'Nie masz jeszcze żadnych matchy',
+                    'search': 'Nie znaleziono użytkowników spełniających kryteria'
                 };
                 content.innerHTML = `
                     <div class="pm-empty-state">
@@ -9271,29 +9350,35 @@ function pm_mobile_member_tabs() {
                 return;
             }
             
-            let html = '<div class="pm-tab-grid">';
+            // Build tags HTML helper
+            const buildTags = (member) => {
+                let tags = '';
+                if (member.faith) tags += `<span class="pm-member-tag">${member.faith}</span>`;
+                if (member.work) tags += `<span class="pm-member-tag">${member.work}</span>`;
+                if (member.diet) tags += `<span class="pm-member-tag">${member.diet}</span>`;
+                if (member.numerology) tags += `<span class="pm-member-tag pm-tag-numerology">${member.numerology}</span>`;
+                if (member.zodiac_sign) tags += `<span class="pm-member-tag pm-tag-zodiac">${member.zodiac_sign}</span>`;
+                return tags;
+            };
+            
+            let html = '<div class="pm-swipe-grid">';
             members.forEach(member => {
                 const avatar = member.hires_avatar?.large || member.hires_avatar?.full || member.avatar_urls?.full || member.avatar || '';
                 const name = member.name || member.display_name || 'Użytkownik';
                 const age = member.age || '';
-                const zodiac = member.zodiac || '';
-                const url = member.link || member.profile_url || '/members/' + (member.user_nicename || member.id);
+                const location = member.location || 'Brak lokalizacji';
+                const url = member.link || member.profile_url || '/members/' + (member.mention_name || member.user_nicename || member.id);
+                const tagsHtml = buildTags(member);
                 
                 html += `
-                    <div class="pm-tab-card">
-                        <a href="${url}">
-                            <img src="${avatar}" alt="${name}" loading="lazy">
+                    <div class="pm-swipe-card" data-user-id="${member.id}">
+                        <a href="${url}" class="pm-swipe-card-link">
+                            <div class="pm-swipe-card-image" style="background-image: url('${avatar}')"></div>
                         </a>
-                        <div class="pm-tab-card-info">
-                            <h4 class="pm-tab-card-name">${name}</h4>
-                            <div style="font-size:12px;opacity:0.8;margin-bottom:4px;">
-                                ${age ? `<span class="pm-tab-card-age">${age} lat</span>` : ''}
-                                ${zodiac ? ` &bull; ${zodiac}` : ''}
-                            </div>
-                            <div class="pm-tab-card-actions">
-                                <a href="${url}" class="pm-tab-card-btn profile">Profil</a>
-                                <a href="${member.thread_id ? '<?php echo esc_url(trailingslashit($user_profile_url) . (function_exists("bp_get_messages_slug") ? bp_get_messages_slug() : "messages")); ?>/view/' + member.thread_id + '/' : '<?php echo esc_url(trailingslashit($user_profile_url) . (function_exists("bp_get_messages_slug") ? bp_get_messages_slug() : "messages")); ?>/compose/?r=' + encodeURIComponent(member.login || member.mention_name || member.name)}" class="pm-tab-card-btn message">💬</a>
-                            </div>
+                        <div class="pm-swipe-card-content">
+                            <a href="${url}" class="pm-swipe-card-name">${name}</a>
+                            <div class="pm-swipe-card-location">${location}</div>
+                            ${tagsHtml ? `<div class="pm-swipe-card-tags">${tagsHtml}</div>` : ''}
                         </div>
                     </div>
                 `;
