@@ -10140,4 +10140,44 @@ function hook_premium_profile_css() {
 }
 add_action('wp_head', 'hook_premium_profile_css');
 
+// ========================================
+// PM Premium: Boost Web Avatar Quality
+// ========================================
+function hook_bp_avatar_quality_boost($html, $params, $item_id, $avatar_dir, $css_id, $html_width, $html_height, $avatar_folder_url, $avatar_folder_dir) {
+    
+    // Only mess with User avatars
+    if ( ! isset($params['object']) || $params['object'] !== 'user' ) {
+        return $html;
+    }
+
+    // Try to find the original WP attachment ID
+    $attach_id = get_user_meta($item_id, 'user_avatar_id', true);
+
+    if ( $attach_id ) {
+        // Get the "Large" or "Full" version directly from WordPress Media Library
+        // "large" is usually 1024px, plenty for web profiles
+        $hires_url = wp_get_attachment_image_url($attach_id, 'large'); 
+
+        // Fallback to full if large doesn't exist (e.g. image was small but original is quality)
+        if ( ! $hires_url ) {
+             $hires_url = wp_get_attachment_image_url($attach_id, 'full');
+        }
+
+        if ( $hires_url ) {
+            // Regex replace the src attribute to force our URL
+            $html = preg_replace('/src=["\']([^"\']+)["\']/', 'src="' . esc_url($hires_url) . '"', $html);
+            
+            // Kill srcset to prevent browser reverting to small versions
+            $html = preg_replace('/srcset=["\']([^"\']+)["\']/', '', $html);
+            $html = preg_replace('/sizes=["\']([^"\']+)["\']/', '', $html);
+            
+            // Add class for debugging
+            $html = str_replace('class="', 'class="pm-hires-avatar ', $html);
+        }
+    }
+
+    return $html;
+}
+add_filter('bp_core_fetch_avatar', 'hook_bp_avatar_quality_boost', 20, 9);
+
 
