@@ -8442,15 +8442,7 @@ function pm_mobile_member_tabs() {
                 </label>
             </div>
             
-            <!-- Show Numerology Toggle -->
-            <div class="pm-filter-row pm-toggle-row">
-                <span class="pm-filter-name">Pokaż Numerologię</span>
-                <label class="pm-toggle">
-                    <input type="checkbox" id="pm-show-numerology" onchange="document.body.classList.toggle('show-numerology', this.checked); localStorage.setItem('pmShowNumerology', this.checked);">
-                    <span class="pm-toggle-slider"></span>
-                </label>
-            </div>
-            
+
             <!-- Filter List -->
             <!-- Filter List -->
             <div class="pm-filter-list">
@@ -8561,6 +8553,15 @@ function pm_mobile_member_tabs() {
                             <option value="Ryby">Ryby</option>
                         </select>
                     </span>
+                </div>
+                
+                <!-- Show Numerology Toggle -->
+                <div class="pm-filter-row pm-toggle-row" style="margin-top: 16px;">
+                    <span class="pm-filter-name">Pokaż Numerologię</span>
+                    <label class="pm-toggle">
+                        <input type="checkbox" id="pm-show-numerology" onchange="document.body.classList.toggle('show-numerology', this.checked); localStorage.setItem('pmShowNumerology', this.checked);">
+                        <span class="pm-toggle-slider"></span>
+                    </label>
                 </div>
             </div>
         </div>
