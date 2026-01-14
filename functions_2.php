@@ -7707,9 +7707,10 @@ function sk_get_members_endpoint($request) {
             $diet_val = bp_get_member_profile_data('field=Styl jedzenia');
             $bio = bp_get_member_profile_data('field=O mnie');
             
-            // Calculate numerology from birth date
+            // Calculate numerology and zodiac from birth date
             $birth_date = bp_get_member_profile_data('field=Data urodzenia');
             $numerology = $birth_date ? sk_calculate_life_path_number($birth_date) : null;
+            $zodiac_sign = $birth_date ? get_zodiac_sign($birth_date) : null;
 
             if ($has_bio === 'true' && empty($bio)) continue;
 
@@ -7743,6 +7744,7 @@ function sk_get_members_endpoint($request) {
                 'work' => $work_val ?: null,
                 'diet' => $diet_val ?: null,
                 'numerology' => $numerology,
+                'zodiac_sign' => $zodiac_sign,
                 'bio' => $bio ?: null,
             ];
         }
