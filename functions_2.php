@@ -7701,6 +7701,10 @@ function sk_get_members_endpoint($request) {
             $work_val = bp_get_member_profile_data('field=Styl Pracy');
             $diet_val = bp_get_member_profile_data('field=Styl jedzenia');
             $bio = bp_get_member_profile_data('field=O mnie');
+            
+            // Calculate numerology from birth date
+            $birth_date = bp_get_member_profile_data('field=Data urodzenia');
+            $numerology = $birth_date ? sk_calculate_life_path_number($birth_date) : null;
 
             if ($has_bio === 'true' && empty($bio)) continue;
 
@@ -7733,7 +7737,8 @@ function sk_get_members_endpoint($request) {
                 'politics' => $politics_val,
                 'work' => $work_val,
                 'diet' => $diet_val,
-                // 'bio' => $bio // Don't send full bio unless needed for list? Not needed for filters. 
+                'numerology' => $numerology,
+                'bio' => $bio,
             ];
         }
         return rest_ensure_response($results);
@@ -8563,6 +8568,13 @@ function pm_mobile_member_tabs() {
                         <span class="pm-toggle-slider"></span>
                     </label>
                 </div>
+                
+                <!-- Reset Filters Button -->
+                <div style="margin-top: 24px; padding-bottom: 20px;">
+                    <button type="button" class="pm-reset-filters-btn" onclick="document.getElementById('pm-age-min').value=18;document.getElementById('pm-age-max').value=65;document.getElementById('pm-age-min-val').textContent='18';document.getElementById('pm-age-max-val').textContent='65+';document.getElementById('pm-age-fill').style.left='0%';document.getElementById('pm-age-fill').style.width='100%';document.getElementById('pm-has-bio').checked=false;document.getElementById('pm-show-numerology').checked=false;document.body.classList.remove('show-numerology');localStorage.removeItem('pmShowNumerology');['pm-filter-faith','pm-filter-politics','pm-filter-work','pm-filter-diet','pm-filter-zodiac'].forEach(id=>{var el=document.getElementById(id);if(el)el.value='';});localStorage.removeItem('pmFilters');">
+                        Zresetuj wszystkie filtry
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -8915,6 +8927,26 @@ function pm_mobile_member_tabs() {
     
     .pm-filter-content {
         padding: 16px;
+        padding-bottom: 40px;
+    }
+    
+    .pm-reset-filters-btn {
+        width: 100%;
+        padding: 12px 20px;
+        background: transparent;
+        color: #e74c3c;
+        border: 1px solid #e74c3c;
+        border-radius: 25px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 14px;
+        transition: all 0.3s ease;
+    }
+    
+    .pm-reset-filters-btn:hover,
+    .pm-reset-filters-btn:active {
+        background: #e74c3c;
+        color: white;
     }
     
     /* Age Section */
