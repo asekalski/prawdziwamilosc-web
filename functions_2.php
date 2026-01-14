@@ -8904,6 +8904,7 @@ function pm_mobile_member_tabs() {
         border-radius: 20px;
         overflow: hidden;
         box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        margin-bottom: 30px;
     }
     
     .pm-swipe-card-link {
