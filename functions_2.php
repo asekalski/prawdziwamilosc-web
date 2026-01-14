@@ -8859,10 +8859,42 @@ function pm_mobile_member_tabs() {
     
     /* NEW: Swipe Grid - Matches Original BuddyPress Layout */
     .pm-swipe-grid {
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-columns: 1fr;
         gap: 0;
         padding: 0;
+    }
+    
+    /* 2 columns on tablets / medium screens */
+    @media (min-width: 600px) {
+        .pm-swipe-grid {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            padding: 15px;
+        }
+        .pm-swipe-card {
+            border-radius: 15px;
+            overflow: hidden;
+        }
+        .pm-swipe-card-image {
+            border-radius: 15px 15px 0 0;
+        }
+    }
+    
+    /* 3 columns on larger screens */
+    @media (min-width: 900px) {
+        .pm-swipe-grid {
+            grid-template-columns: repeat(3, 1fr);
+        }
+    }
+    
+    /* 4 columns on very wide screens */
+    @media (min-width: 1200px) {
+        .pm-swipe-grid {
+            grid-template-columns: repeat(4, 1fr);
+            max-width: 1400px;
+            margin: 0 auto;
+        }
     }
     
     .pm-swipe-card {
