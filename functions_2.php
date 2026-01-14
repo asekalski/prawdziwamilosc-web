@@ -7563,6 +7563,74 @@ function sk_get_liked_users_endpoint($request) {
 function sk_get_members_endpoint($request) {
     $current_user_id = get_current_user_id();
     
+    // Check for include parameter (filter to specific user IDs only)
+    $include = $request->get_param('include');
+    if ($include) {
+        // Parse comma-separated IDs
+        $include_ids = array_map('intval', explode(',', $include));
+        $include_ids = array_filter($include_ids); // Remove zeros/empty
+        
+        if (empty($include_ids)) {
+            return rest_ensure_response([]);
+        }
+        
+        // Get only the specified users
+        $users_data = [];
+        foreach ($include_ids as $user_id) {
+            if ($user_id == $current_user_id || $user_id == 1) continue; // Skip self and admin
+            
+            $user = get_userdata($user_id);
+            if (!$user) continue;
+            
+            // Build user data
+            $birth_date = bp_get_profile_field_data(['field' => 'Data urodzenia', 'user_id' => $user_id]);
+            $age = '';
+            if ($birth_date) {
+                try {
+                    $birth = new DateTime($birth_date);
+                    $now = new DateTime();
+                    $age = $now->diff($birth)->y;
+                } catch (Exception $e) {}
+            }
+            
+            $faith = bp_get_profile_field_data(['field' => 'Wiara', 'user_id' => $user_id]);
+            $politics = bp_get_profile_field_data(['field' => 'Poglądy Polityczne', 'user_id' => $user_id]);
+            $work = bp_get_profile_field_data(['field' => 'Styl pracy', 'user_id' => $user_id]);
+            $diet = bp_get_profile_field_data(['field' => 'Dieta', 'user_id' => $user_id]);
+            $bio = bp_get_profile_field_data(['field' => 343, 'user_id' => $user_id]);
+            $last_activity = bp_get_user_last_activity($user_id);
+            $zodiac = bp_get_profile_field_data(['field' => 'Znak Zodiaku', 'user_id' => $user_id]);
+            
+            $custom_avatar_id = get_user_meta($user_id, 'sk_profile_photo_id', true);
+            $hires_avatar = [];
+            if ($custom_avatar_id) {
+                $hires_avatar = [
+                    'full' => wp_get_attachment_image_url($custom_avatar_id, 'full'),
+                    'large' => wp_get_attachment_image_url($custom_avatar_id, 'large'),
+                ];
+            }
+            
+            $users_data[] = [
+                'id' => $user_id,
+                'name' => $user->display_name,
+                'mention_name' => $user->user_nicename,
+                'link' => bp_members_get_user_url($user_id),
+                'avatar' => bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]),
+                'hires_avatar' => $hires_avatar,
+                'age' => $age,
+                'bio' => $bio ? esc_html(wp_trim_words($bio, 15, '...')) : '',
+                'faith' => $faith ?: null,
+                'politics' => $politics ?: null,
+                'work' => $work ?: null,
+                'diet' => $diet ?: null,
+                'zodiac_sign' => $zodiac ?: null,
+                'last_activity' => $last_activity ? bp_core_time_since($last_activity) : null,
+            ];
+        }
+        
+        return rest_ensure_response($users_data);
+    }
+    
     // Pagination params
     $page = $request->get_param('page') ?: 1;
     $per_page = $request->get_param('per_page') ?: 20;
@@ -7592,6 +7660,7 @@ function sk_get_members_endpoint($request) {
         $exclude_ids = array_merge($exclude_ids, $blocked_users);
     }
     $args['exclude'] = $exclude_ids;
+
 
     // Build xProfile Query
     $xprofile_query = ['relation' => 'AND'];
@@ -8411,6 +8480,7 @@ function pm_mobile_member_tabs() {
         <button class="pm-mtab" data-tab="liked">Polubieni</button>
         <button class="pm-mtab" data-tab="likes-me">Lubią Mnie</button>
         <button class="pm-mtab" data-tab="matches">Matche</button>
+        <button class="pm-mtab" data-tab="skipped">Usunięci</button>
     </div>
     
     <div id="pm-tabs-loader" style="display:none; text-align:center; padding:40px;">
@@ -8922,14 +8992,11 @@ function pm_mobile_member_tabs() {
         border-radius: 20px 20px 0 0;
     }
     
-    /* Overlay at bottom of image */
+    /* Info section BELOW image - not on top of it */
     .pm-swipe-card-overlay {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        padding: 80px 15px 25px 15px;
-        background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.8) 30%, rgba(0,0,0,0.4) 60%, transparent 100%);
+        position: relative;
+        padding: 15px;
+        background: linear-gradient(to bottom, rgba(20,20,30,0.95) 0%, rgba(15,15,25,1) 100%);
     }
     
     .pm-swipe-card-name {
@@ -8942,10 +9009,15 @@ function pm_mobile_member_tabs() {
         margin-bottom: 4px;
     }
     
-    .pm-swipe-card-location {
-        color: rgba(255,255,255,0.8);
-        font-size: 14px;
-        margin-bottom: 10px;
+    .pm-swipe-card-bio {
+        font-size: 13px;
+        color: rgba(255,255,255,0.7);
+        margin-bottom: 8px;
+        line-height: 1.4;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
     }
     
     .pm-swipe-card-tags {
@@ -9006,6 +9078,17 @@ function pm_mobile_member_tabs() {
     
     .pm-action-btn.pm-action-skip:hover {
         background: #e74c3c;
+        color: #fff;
+        transform: scale(1.1);
+    }
+    
+    .pm-action-btn.pm-action-restore {
+        border-color: #3498db;
+        color: #3498db;
+    }
+    
+    .pm-action-btn.pm-action-restore:hover {
+        background: #3498db;
         color: #fff;
         transform: scale(1.1);
     }
@@ -9346,6 +9429,33 @@ function pm_mobile_member_tabs() {
             loader.style.display = 'block';
             document.body.classList.add('pm-tabs-active');
             
+            // Special handling for skipped tab - loads from localStorage
+            if (tabId === 'skipped') {
+                try {
+                    const skippedIds = JSON.parse(localStorage.getItem('pmSkippedUsers') || '[]');
+                    if (skippedIds.length === 0) {
+                        loader.style.display = 'none';
+                        renderMembers([], tabId);
+                        return;
+                    }
+                    // Fetch user data for skipped IDs
+                    const endpoint = '<?php echo rest_url('sk/v1/members'); ?>?include=' + skippedIds.join(',');
+                    const response = await fetch(endpoint, {
+                        credentials: 'same-origin',
+                        headers: { 'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>' }
+                    });
+                    if (!response.ok) throw new Error('API error');
+                    const data = await response.json();
+                    loader.style.display = 'none';
+                    renderSkippedMembers(data);
+                } catch (error) {
+                    console.error('Skipped tab error:', error);
+                    loader.style.display = 'none';
+                    content.innerHTML = '<p style="text-align:center;padding:40px;color:#999;">Nie udało się załadować danych</p>';
+                }
+                return;
+            }
+            
             try {
                 // Build endpoint with filters for search tab
                 let endpoint = getEndpoint(tabId);
@@ -9392,7 +9502,7 @@ function pm_mobile_member_tabs() {
         }
         
         // If URL has tab parameter, switch to that tab on load
-        if (urlTab && ['search', 'liked', 'likes-me', 'matches'].includes(urlTab)) {
+        if (urlTab && ['search', 'liked', 'likes-me', 'matches', 'skipped'].includes(urlTab)) {
             setTimeout(() => switchToTab(urlTab), 100);
         } else {
             // Default: load search via API on page init
@@ -9423,7 +9533,8 @@ function pm_mobile_member_tabs() {
                     'liked': 'Nie masz jeszcze polubionych profili',
                     'likes-me': 'Nikt jeszcze nie polubił Twojego profilu',
                     'matches': 'Nie masz jeszcze żadnych matchy',
-                    'search': 'Nie znaleziono użytkowników spełniających kryteria'
+                    'search': 'Nie znaleziono użytkowników spełniających kryteria',
+                    'skipped': 'Nie masz żadnych usuniętych profili'
                 };
                 content.innerHTML = `
                     <div class="pm-empty-state">
@@ -9452,33 +9563,98 @@ function pm_mobile_member_tabs() {
                 const avatar = member.hires_avatar?.large || member.hires_avatar?.full || member.avatar_urls?.full || member.avatar || '';
                 const name = member.name || member.display_name || 'Użytkownik';
                 const age = member.age || '';
-                const location = member.location || 'Brak lokalizacji';
+                const bio = member.bio ? (member.bio.length > 60 ? member.bio.substring(0, 60) + '...' : member.bio) : '';
                 const url = member.link || member.profile_url || '/members/' + (member.mention_name || member.user_nicename || member.id);
                 const tagsHtml = buildTags(member);
                 
                 html += `
                     <div class="pm-swipe-card" data-user-id="${member.id}">
                         <a href="${url}" class="pm-swipe-card-link">
-                            <div class="pm-swipe-card-image" style="background-image: url('${avatar}')">
-                                <div class="pm-swipe-card-overlay">
-                                    <div class="pm-swipe-card-info">
-                                        <div class="pm-swipe-card-name">${name}${age ? `, ${age}` : ''}</div>
-                                        <div class="pm-swipe-card-location">${location}</div>
-                                        ${tagsHtml ? `<div class="pm-swipe-card-tags">${tagsHtml}</div>` : ''}
-                                    </div>
-                                    <div class="pm-swipe-card-actions">
-                                        <button class="pm-action-btn pm-action-skip" onclick="event.preventDefault(); event.stopPropagation(); pmSkipUser(${member.id});">✕</button>
-                                        <button class="pm-action-btn pm-action-like" onclick="event.preventDefault(); event.stopPropagation(); pmLikeUser(${member.id});">♥</button>
-                                    </div>
-                                </div>
-                            </div>
+                            <div class="pm-swipe-card-image" style="background-image: url('${avatar}')"></div>
                         </a>
+                        <div class="pm-swipe-card-overlay">
+                            <div class="pm-swipe-card-info">
+                                <a href="${url}" class="pm-swipe-card-name">${name}${age ? `, ${age}` : ''}</a>
+                                ${bio ? `<div class="pm-swipe-card-bio">${bio}</div>` : ''}
+                                ${tagsHtml ? `<div class="pm-swipe-card-tags">${tagsHtml}</div>` : ''}
+                            </div>
+                            <div class="pm-swipe-card-actions">
+                                <button class="pm-action-btn pm-action-skip" onclick="event.preventDefault(); event.stopPropagation(); pmSkipUser(${member.id});">✕</button>
+                                <button class="pm-action-btn pm-action-like" onclick="event.preventDefault(); event.stopPropagation(); pmLikeUser(${member.id});">♥</button>
+                            </div>
+                        </div>
                     </div>
                 `;
             });
             html += '</div>';
             content.innerHTML = html;
         }
+        
+        // Render skipped members with "Restore" button
+        function renderSkippedMembers(members) {
+            if (!members || members.length === 0) {
+                content.innerHTML = `
+                    <div class="pm-empty-state">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                        </svg>
+                        <p>Nie masz żadnych usuniętych profili</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Build tags HTML helper
+            const buildTags = (member) => {
+                let tags = '';
+                if (member.faith) tags += `<span class="pm-member-tag">${member.faith}</span>`;
+                if (member.work) tags += `<span class="pm-member-tag">${member.work}</span>`;
+                if (member.diet) tags += `<span class="pm-member-tag">${member.diet}</span>`;
+                if (member.numerology) tags += `<span class="pm-member-tag pm-tag-numerology">${member.numerology}</span>`;
+                if (member.zodiac_sign) tags += `<span class="pm-member-tag pm-tag-zodiac">${member.zodiac_sign}</span>`;
+                return tags;
+            };
+            
+            let html = '<div class="pm-swipe-grid">';
+            members.forEach(member => {
+                const avatar = member.hires_avatar?.large || member.hires_avatar?.full || member.avatar_urls?.full || member.avatar || '';
+                const name = member.name || member.display_name || 'Użytkownik';
+                const age = member.age || '';
+                const bio = member.bio ? (member.bio.length > 60 ? member.bio.substring(0, 60) + '...' : member.bio) : '';
+                const url = member.link || member.profile_url || '/members/' + (member.mention_name || member.user_nicename || member.id);
+                const tagsHtml = buildTags(member);
+                
+                html += `
+                    <div class="pm-swipe-card" data-user-id="${member.id}">
+                        <a href="${url}" class="pm-swipe-card-link">
+                            <div class="pm-swipe-card-image" style="background-image: url('${avatar}')"></div>
+                        </a>
+                        <div class="pm-swipe-card-overlay">
+                            <div class="pm-swipe-card-info">
+                                <a href="${url}" class="pm-swipe-card-name">${name}${age ? `, ${age}` : ''}</a>
+                                ${bio ? `<div class="pm-swipe-card-bio">${bio}</div>` : ''}
+                                ${tagsHtml ? `<div class="pm-swipe-card-tags">${tagsHtml}</div>` : ''}
+                            </div>
+                            <div class="pm-swipe-card-actions">
+                                <button class="pm-action-btn pm-action-restore" onclick="event.preventDefault(); event.stopPropagation(); pmRestoreUser(${member.id});">↩</button>
+                                <button class="pm-action-btn pm-action-like" onclick="event.preventDefault(); event.stopPropagation(); pmLikeUser(${member.id});">♥</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            content.innerHTML = html;
+        }
+        
+        // Restore user - remove from skipped list
+        window.pmRestoreUser = function(userId) {
+            hideCard(userId);
+            // Remove from localStorage
+            let skipped = JSON.parse(localStorage.getItem('pmSkippedUsers') || '[]');
+            skipped = skipped.filter(id => id !== userId);
+            localStorage.setItem('pmSkippedUsers', JSON.stringify(skipped));
+        };
         
         // Hide card with animation
         function hideCard(userId) {
