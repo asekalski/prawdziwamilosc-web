@@ -8901,41 +8901,48 @@ function pm_mobile_member_tabs() {
         background: #1a1a2e;
         display: flex;
         flex-direction: column;
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
     }
     
     .pm-swipe-card-link {
         display: block;
+        text-decoration: none;
     }
     
     .pm-swipe-card-image {
+        position: relative;
         width: 100%;
-        padding-bottom: 100%; /* 1:1 aspect ratio */
+        padding-bottom: 120%; /* 5:6 aspect ratio for portrait */
         background-size: cover;
         background-position: center;
         background-color: #2d2d3a;
+        border-radius: 20px 20px 0 0;
     }
     
-    .pm-swipe-card-content {
-        padding: 15px;
-        background: #1a1a2e;
+    /* Overlay at bottom of image */
+    .pm-swipe-card-overlay {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        padding: 50px 15px 15px 15px;
+        background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 50%, transparent 100%);
     }
     
     .pm-swipe-card-name {
         display: block;
-        color: #3498db;
-        font-size: 18px;
-        font-weight: 600;
+        color: #fff;
+        font-size: 22px;
+        font-weight: 700;
         text-decoration: none;
-        margin-bottom: 5px;
-    }
-    
-    .pm-swipe-card-name:hover {
-        color: #5dade2;
-        text-decoration: none;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        margin-bottom: 4px;
     }
     
     .pm-swipe-card-location {
-        color: rgba(255,255,255,0.6);
+        color: rgba(255,255,255,0.8);
         font-size: 14px;
         margin-bottom: 10px;
     }
@@ -8943,17 +8950,17 @@ function pm_mobile_member_tabs() {
     .pm-swipe-card-tags {
         display: flex;
         flex-wrap: wrap;
-        gap: 8px;
+        gap: 6px;
     }
     
     .pm-member-tag {
         display: inline-block;
-        padding: 6px 12px;
-        background: rgba(255,255,255,0.1);
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 20px;
+        padding: 5px 10px;
+        background: rgba(255,255,255,0.15);
+        border: 1px solid rgba(255,255,255,0.3);
+        border-radius: 15px;
         color: #fff;
-        font-size: 13px;
+        font-size: 12px;
     }
     
     .pm-member-tag.pm-tag-numerology {
@@ -8963,8 +8970,52 @@ function pm_mobile_member_tabs() {
     }
     
     .pm-member-tag.pm-tag-zodiac {
-        background: rgba(155, 89, 182, 0.3);
+        background: rgba(155, 89, 182, 0.4);
         border-color: #9b59b6;
+    }
+    
+    /* Action Buttons */
+    .pm-swipe-card-actions {
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+        padding: 15px;
+        background: #1a1a2e;
+    }
+    
+    .pm-action-btn {
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        border: 2px solid;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    
+    .pm-action-btn.pm-action-skip {
+        background: transparent;
+        border-color: #e74c3c;
+        color: #e74c3c;
+    }
+    
+    .pm-action-btn.pm-action-skip:hover {
+        background: #e74c3c;
+        color: #fff;
+    }
+    
+    .pm-action-btn.pm-action-like {
+        background: transparent;
+        border-color: #2ecc71;
+        color: #2ecc71;
+    }
+    
+    .pm-action-btn.pm-action-like:hover {
+        background: #2ecc71;
+        color: #fff;
     }
     
     .pm-empty-state {
@@ -9405,12 +9456,17 @@ function pm_mobile_member_tabs() {
                 html += `
                     <div class="pm-swipe-card" data-user-id="${member.id}">
                         <a href="${url}" class="pm-swipe-card-link">
-                            <div class="pm-swipe-card-image" style="background-image: url('${avatar}')"></div>
+                            <div class="pm-swipe-card-image" style="background-image: url('${avatar}')">
+                                <div class="pm-swipe-card-overlay">
+                                    <div class="pm-swipe-card-name">${name}${age ? `, ${age}` : ''}</div>
+                                    <div class="pm-swipe-card-location">${location}</div>
+                                    ${tagsHtml ? `<div class="pm-swipe-card-tags">${tagsHtml}</div>` : ''}
+                                </div>
+                            </div>
                         </a>
-                        <div class="pm-swipe-card-content">
-                            <a href="${url}" class="pm-swipe-card-name">${name}</a>
-                            <div class="pm-swipe-card-location">${location}</div>
-                            ${tagsHtml ? `<div class="pm-swipe-card-tags">${tagsHtml}</div>` : ''}
+                        <div class="pm-swipe-card-actions">
+                            <button class="pm-action-btn pm-action-skip" onclick="event.preventDefault(); pmSkipUser(${member.id});">✕</button>
+                            <button class="pm-action-btn pm-action-like" onclick="event.preventDefault(); pmLikeUser(${member.id});">♥</button>
                         </div>
                     </div>
                 `;
