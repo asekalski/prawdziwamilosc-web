@@ -9683,4 +9683,238 @@ add_filter('rest_post_dispatch', function($response, $server, $request) {
     return $response;
 }, 10, 3);
 
+/**
+ * PrawdziwaMilosc Premium Profile Styles
+ * Injects custom CSS to modernize BuddyPress profile edit pages.
+ */
+function hook_premium_profile_css() {
+    if ( function_exists('is_buddypress') && is_buddypress() ) {
+        ?>
+        <style type="text/css">
+            /* --- PM Premium Theme V6: Functionality & Width Fix --- */
+            :root {
+                --pm-gold: #d4af37;
+                --pm-dark-bg: #121212;
+                --pm-card-bg: #1e1e1e;
+                --pm-input-bg: #2a2a2a;
+                --pm-text-main: #ffffff;
+                --pm-text-muted: #888888;
+                --pm-border: #444;
+            }
+
+            /* --- GLOBAL WIDTH RESET --- */
+            body.buddypress .site-content,
+            body.buddypress .entry-content,
+            body.buddypress .container,
+            body.buddypress #content,
+            body.buddypress div#primary,
+            body.buddypress article {
+                max-width: 100% !important;
+                width: 100% !important;
+                padding: 0 !important;
+                margin: 0 !important;
+            }
+
+            /* --- MAIN WRAPPER --- */
+            body.buddypress #buddypress {
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 10px !important;
+                background: var(--pm-dark-bg) !important;
+                box-sizing: border-box !important;
+            }
+
+            /* --- STRIP INTERIOR CONTAINERS --- */
+            /* Remove 'card' styling from everything inside the form to fix the 'narrow box' look */
+            #buddypress #profile-edit-form,
+            #buddypress form, 
+            #buddypress fieldset,
+            #buddypress .profile,
+            #buddypress .bp-profile-edit {
+                background: transparent !important;
+                border: none !important;
+                box-shadow: none !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                width: 100% !important;
+                max-width: 100% !important;
+            }
+
+            /* --- HEADINGS --- */
+            #buddypress h4, 
+            #buddypress legend {
+                color: var(--pm-gold) !important;
+                font-size: 1.1rem !important;
+                font-weight: 700 !important;
+                margin: 20px 0 10px 0 !important;
+                text-transform: uppercase !important;
+                border: none !important;
+                width: 100% !important;
+                background: transparent !important;
+            }
+
+            /* --- FORM FIELDS --- */
+            #buddypress .editfield {
+                margin-bottom: 25px !important;
+                width: 100% !important;
+                clear: both !important;
+            }
+
+            #buddypress label {
+                display: block !important;
+                color: var(--pm-text-muted) !important;
+                font-size: 0.85rem !important;
+                margin-bottom: 8px !important;
+                font-weight: 600 !important;
+                text-transform: uppercase !important;
+            }
+
+            /* --- INPUTS --- */
+            #buddypress input[type=text],
+            #buddypress textarea,
+            #buddypress select {
+                background: var(--pm-input-bg) !important;
+                border: 1px solid var(--pm-border) !important;
+                color: #fff !important;
+                border-radius: 8px !important;
+                padding: 14px !important;
+                font-size: 1rem !important;
+                width: 100% !important;
+                box-sizing: border-box !important;
+                height: auto !important;
+            }
+            
+            #buddypress input:focus, #buddypress select:focus {
+                border-color: var(--pm-gold) !important;
+                outline: none !important;
+            }
+
+            /* --- DATE FIELDS: INLINE FLOW --- */
+            #buddypress .editfield.datebox {
+                display: flex !important;
+                flex-wrap: nowrap !important;
+                gap: 8px !important;
+                align-items: center !important;
+            }
+            #buddypress .editfield.datebox label {
+                display: none !important; /* Hide sub-labels */
+            }
+            #buddypress .editfield.datebox select {
+                flex: 1 !important;
+                text-align: center !important;
+                min-width: 0 !important;
+            }
+
+            /* --- TABS --- */
+            #buddypress #profile-group-tabs {
+                display: flex !important;
+                gap: 8px !important;
+                padding: 10px 0 !important;
+                margin-bottom: 10px !important;
+                overflow-x: auto !important;
+                white-space: nowrap !important;
+            }
+            #buddypress #profile-group-tabs li {
+                list-style: none !important;
+                margin: 0 !important;
+            }
+            #buddypress #profile-group-tabs li a {
+                display: block !important;
+                padding: 10px 20px !important;
+                background: #333 !important;
+                color: #aaa !important;
+                border-radius: 30px !important;
+                font-size: 0.9rem !important;
+                text-decoration: none !important;
+            }
+            #buddypress #profile-group-tabs li.current a {
+                background: var(--pm-gold) !important;
+                color: #000 !important;
+                font-weight: bold !important;
+            }
+
+            /* --- VISIBILITY SETTINGS (Fix) --- */
+            .field-visibility-settings-toggle {
+                display: block !important;
+                margin-top: 8px !important;
+                font-size: 0.85rem !important;
+                color: #888 !important;
+            }
+            
+            /* Make the link clearly clickable and top-layered */
+            .field-visibility-settings-toggle a {
+                color: var(--pm-text-muted) !important;
+                background: rgba(255,255,255,0.05) !important;
+                padding: 4px 10px !important;
+                border-radius: 4px !important;
+                text-decoration: none !important;
+                margin-left: 8px !important;
+                cursor: pointer !important;
+                position: relative !important;
+                z-index: 9999 !important; /* Force clickability */
+                pointer-events: auto !important;
+                border: 1px solid #444 !important;
+            }
+
+            /* THE CONTAINER */
+            /* We do NOT enforce display: none here. 
+               We rely on BuddyPress JS. If JS fails, it stays visible (safer). */
+            .field-visibility-settings {
+                /* display: none;  <-- REMOVED to verify if JS handles it */
+                margin-top: 15px !important;
+                background: #1a1a1a !important;
+                padding: 15px !important;
+                border-radius: 8px !important;
+                border: 1px solid var(--pm-gold) !important; /* Visible border for debug */
+                width: 100% !important;
+                box-sizing: border-box !important;
+                position: relative !important; 
+                z-index: 9998 !important;
+            }
+
+            .field-visibility-settings legend { display: none !important; }
+            
+            .field-visibility-settings ul {
+                display: flex !important;
+                flex-direction: column !important;
+                gap: 12px !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                list-style: none !important;
+            }
+            
+            .field-visibility-settings li {
+                display: flex !important;
+                align-items: center !important;
+                font-size: 0.95rem !important;
+                color: #fff !important;
+            }
+            
+            .field-visibility-settings input[type="radio"] {
+                width: 20px !important;
+                height: 20px !important;
+                margin-right: 12px !important;
+                accent-color: var(--pm-gold) !important;
+            }
+
+            /* --- SUBMIT --- */
+            #buddypress .submit input {
+                width: 100% !important;
+                padding: 16px !important;
+                background: var(--pm-gold) !important;
+                color: #000 !important;
+                font-weight: 800 !important;
+                text-transform: uppercase !important;
+                border: none !important;
+                border-radius: 8px !important;
+                margin-top: 20px !important;
+                font-size: 1rem !important;
+                cursor: pointer !important;
+            }
+        </style>
+        <?php
+    }
+}
+add_action('wp_head', 'hook_premium_profile_css');
+
 
