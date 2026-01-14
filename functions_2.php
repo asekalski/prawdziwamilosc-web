@@ -10180,6 +10180,37 @@ function hook_bp_avatar_quality_boost($html, $params, $item_id, $avatar_dir, $cs
 }
 add_filter('bp_core_fetch_avatar', 'hook_bp_avatar_quality_boost', 20, 9);
 
+// ========================================
+// PM Premium: Safer Boost Web Avatar URL (V12.1)
+// ========================================
+function hook_bp_avatar_urls_safer($url, $item_id, $object) {
+    // Only target users
+    if ( $object !== 'user' && $object !== 'member' ) {
+        return $url;
+    }
+
+    // Sanity check
+    if ( ! is_numeric($item_id) ) {
+        return $url;
+    }
+
+    $attach_id = get_user_meta($item_id, 'user_avatar_id', true);
+    
+    if ( $attach_id ) {
+        $hires_url = wp_get_attachment_image_url($attach_id, 'large');
+        
+        if ( ! $hires_url ) {
+            $hires_url = wp_get_attachment_image_url($attach_id, 'full');
+        }
+
+        if ( $hires_url ) {
+            return $hires_url;
+        }
+    }
+    return $url;
+}
+// IMPORTANT: Only requesting 3 args to avoid argument count errors
+add_filter('bp_core_fetch_avatar_url', 'hook_bp_avatar_urls_safer', 20, 3);
 
 
 
