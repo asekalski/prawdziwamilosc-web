@@ -605,6 +605,9 @@ function grid_uzytkownikow_shortcode()
             function injectResetButton() {
                 // Prevent multiple injections
                 if (document.querySelector('.reset-filters-btn-container')) return;
+                
+                // Don't inject if mobile filter panel is open (it has its own reset button)
+                if (document.querySelector('.pm-filter-panel.open')) return;
 
                 const gotoweBtn = findGotoweButton();
                 if (!gotoweBtn) return;
@@ -615,6 +618,8 @@ function grid_uzytkownikow_shortcode()
                 const container = form ? form : gotoweBtn.closest('.elementor-widget-container') || gotoweBtn.parentElement.parentElement;
 
                 if (container) {
+                    // Skip if inside mobile filter panel (it has its own reset button)
+                    if (container.closest('.pm-filter-panel')) return;
                     const resetBtnContainer = document.createElement('div');
                     resetBtnContainer.className = 'reset-filters-btn-container';
                     resetBtnContainer.style.marginTop = '15px';
