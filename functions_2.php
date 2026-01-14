@@ -8974,30 +8974,31 @@ function pm_mobile_member_tabs() {
         border-color: #9b59b6;
     }
     
-    /* Action Buttons */
+    /* Action Buttons - Inside Overlay */
     .pm-swipe-card-actions {
         display: flex;
         justify-content: center;
-        gap: 20px;
-        padding: 15px;
-        background: #1a1a2e;
+        gap: 30px;
+        padding: 0;
+        margin-top: 15px;
     }
     
     .pm-action-btn {
-        width: 50px;
-        height: 50px;
+        width: 55px;
+        height: 55px;
         border-radius: 50%;
-        border: 2px solid;
+        border: 3px solid;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 24px;
+        font-size: 26px;
         cursor: pointer;
         transition: all 0.2s ease;
+        background: rgba(0,0,0,0.5);
+        backdrop-filter: blur(5px);
     }
     
     .pm-action-btn.pm-action-skip {
-        background: transparent;
         border-color: #e74c3c;
         color: #e74c3c;
     }
@@ -9005,10 +9006,10 @@ function pm_mobile_member_tabs() {
     .pm-action-btn.pm-action-skip:hover {
         background: #e74c3c;
         color: #fff;
+        transform: scale(1.1);
     }
     
     .pm-action-btn.pm-action-like {
-        background: transparent;
         border-color: #2ecc71;
         color: #2ecc71;
     }
@@ -9016,6 +9017,7 @@ function pm_mobile_member_tabs() {
     .pm-action-btn.pm-action-like:hover {
         background: #2ecc71;
         color: #fff;
+        transform: scale(1.1);
     }
     
     .pm-empty-state {
@@ -9458,22 +9460,77 @@ function pm_mobile_member_tabs() {
                         <a href="${url}" class="pm-swipe-card-link">
                             <div class="pm-swipe-card-image" style="background-image: url('${avatar}')">
                                 <div class="pm-swipe-card-overlay">
-                                    <div class="pm-swipe-card-name">${name}${age ? `, ${age}` : ''}</div>
-                                    <div class="pm-swipe-card-location">${location}</div>
-                                    ${tagsHtml ? `<div class="pm-swipe-card-tags">${tagsHtml}</div>` : ''}
+                                    <div class="pm-swipe-card-info">
+                                        <div class="pm-swipe-card-name">${name}${age ? `, ${age}` : ''}</div>
+                                        <div class="pm-swipe-card-location">${location}</div>
+                                        ${tagsHtml ? `<div class="pm-swipe-card-tags">${tagsHtml}</div>` : ''}
+                                    </div>
+                                    <div class="pm-swipe-card-actions">
+                                        <button class="pm-action-btn pm-action-skip" onclick="event.preventDefault(); event.stopPropagation(); pmSkipUser(${member.id});">✕</button>
+                                        <button class="pm-action-btn pm-action-like" onclick="event.preventDefault(); event.stopPropagation(); pmLikeUser(${member.id});">♥</button>
+                                    </div>
                                 </div>
                             </div>
                         </a>
-                        <div class="pm-swipe-card-actions">
-                            <button class="pm-action-btn pm-action-skip" onclick="event.preventDefault(); pmSkipUser(${member.id});">✕</button>
-                            <button class="pm-action-btn pm-action-like" onclick="event.preventDefault(); pmLikeUser(${member.id});">♥</button>
-                        </div>
                     </div>
                 `;
             });
             html += '</div>';
             content.innerHTML = html;
         }
+        
+        // Hide card with animation
+        function hideCard(userId) {
+            const card = document.querySelector(`.pm-swipe-card[data-user-id="${userId}"]`);
+            if (card) {
+                card.style.transition = 'opacity 0.3s, transform 0.3s';
+                card.style.opacity = '0';
+                card.style.transform = 'scale(0.8)';
+                setTimeout(() => card.remove(), 300);
+            }
+        }
+        
+        // Skip user - just hide from view
+        window.pmSkipUser = function(userId) {
+            hideCard(userId);
+            // Store skipped users in localStorage to persist
+            let skipped = JSON.parse(localStorage.getItem('pmSkippedUsers') || '[]');
+            if (!skipped.includes(userId)) {
+                skipped.push(userId);
+                localStorage.setItem('pmSkippedUsers', JSON.stringify(skipped));
+            }
+        };
+        
+        // Like user - call API and hide
+        window.pmLikeUser = async function(userId) {
+            // Hide immediately for responsiveness
+            hideCard(userId);
+            
+            try {
+                const response = await fetch('<?php echo rest_url('sk/v1/like'); ?>', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>'
+                    },
+                    body: JSON.stringify({ user_id: userId })
+                });
+                
+                if (!response.ok) {
+                    console.error('Like API error:', await response.text());
+                } else {
+                    const data = await response.json();
+                    console.log('Like response:', data);
+                    // If it's a match, show notification!
+                    if (data.is_match) {
+                        alert('🎉 Masz Match! Możesz teraz porozmawiać.');
+                    }
+                }
+            } catch (error) {
+                console.error('Like error:', error);
+            }
+        };
         
         // Load saved filters from localStorage on page init
         function loadFilters() {
