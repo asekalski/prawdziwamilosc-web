@@ -9702,13 +9702,7 @@ function hook_premium_profile_css() {
                 --pm-border: #444;
             }
 
-            /* --- GLOBAL DARK ENFORCER --- */
-            /* Force the entire page background to be dark first */
-            html, body, #page, .site-content {
-                background-color: var(--pm-dark-bg) !important;
-                color: var(--pm-text-main) !important;
-            }
-
+<<<<<<< SEARCH
             /* --- FORCE ALL PARENTS TO FULL WIDTH (MOBILE FIX) --- */
             body.buddypress,
             body.buddypress .site,
@@ -9761,6 +9755,161 @@ function hook_premium_profile_css() {
                 box-shadow: none !important;
                 border-radius: 0 !important;
             }
+=======
+            /* --- PM Premium Theme V11: Nuclear Width & Green Box Killer --- */
+            :root {
+                --pm-gold: #d4af37;
+                --pm-dark-bg: #121212;
+                --pm-card-bg: #1e1e1e;
+                --pm-input-bg: #2a2a2a;
+                --pm-text-main: #ffffff;
+                --pm-text-muted: #aaaaaa;
+                --pm-border: #444;
+            }
+
+            /* --- GLOBAL DARK ENFORCER --- */
+            html, body, #page, .site-content, .entry-content, article, main {
+                background-color: var(--pm-dark-bg) !important;
+                color: var(--pm-text-main) !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                overflow-x: hidden !important;
+            }
+
+            /* --- MAIN BUDDYPRESS CONTAINER (Edge-to-Edge) --- */
+            body.buddypress #buddypress {
+                width: 100vw !important;
+                max-width: 100vw !important;
+                margin-left: calc(50% - 50vw) !important;
+                margin-right: calc(50% - 50vw) !important;
+                padding: 10px 15px !important; /* Proper mobile side padding */
+                background: var(--pm-dark-bg) !important;
+                box-sizing: border-box !important;
+            }
+
+            /* --- THE NUCLEAR OPTION: KILL GREEN BOXES & BORDERS --- */
+            /* Using wildcard selectors to strip styles from EVERYTHING deeply nested */
+            #buddypress form *, 
+            #buddypress form *::before, 
+            #buddypress form *::after {
+                background-color: transparent !important;
+                background-image: none !important;
+                border-color: transparent !important;
+                box-shadow: none !important;
+                border-radius: 0 !important;
+            }
+
+            /* --- RESTORE STYLES FOR INPUTS ONLY --- */
+            #buddypress input, 
+            #buddypress select, 
+            #buddypress textarea {
+                background-color: var(--pm-input-bg) !important;
+                border: 1px solid var(--pm-border) !important;
+                border-radius: 8px !important;
+            }
+            #buddypress input:focus, 
+            #buddypress select:focus {
+                border-color: var(--pm-gold) !important;
+            }
+            
+            /* --- RESTORE RADIO BUTTONS --- */
+            #buddypress input[type="radio"] {
+                accent-color: var(--pm-gold) !important;
+                border: 1px solid #555 !important;
+                border-radius: 50% !important;
+                width: 20px !important;
+                height: 20px !important;
+                background-color: #333 !important;
+            }
+
+            /* --- RESTORE VISIBILITY CONTAINER --- */
+            /* This needs a specific background to stand out */
+            body #buddypress .field-visibility-settings {
+                background-color: #1a1a1a !important;
+                border: 1px solid #444 !important; /* Restore border */
+                border-color: #444 !important;
+                border-radius: 12px !important;
+                padding: 20px !important;
+                margin-top: 15px !important;
+            }
+            
+            /* --- RESTORE SUBMIT BUTTON --- */
+            #buddypress .submit input {
+                background: linear-gradient(135deg, #d4af37 0%, #aa8c2c 100%) !important;
+                color: #000 !important;
+                border-radius: 50px !important;
+            }
+            
+            /* --- RESTORE TABS --- */
+            #buddypress #profile-group-tabs li a {
+                background-color: #333 !important;
+                border-radius: 50px !important;
+            }
+            #buddypress #profile-group-tabs li.current a {
+                background-color: var(--pm-gold) !important;
+            }
+
+            /* --- FORM CONTAINERS RESET --- */
+            #buddypress #profile-edit-form,
+            #buddypress .profile,
+            #buddypress fieldset,
+            #buddypress .editfield,
+            #buddypress .bp-profile-edit {
+                width: 100% !important;
+                max-width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: none !important;
+            }
+
+            /* --- HEADINGS --- */
+            #buddypress h4, 
+            #buddypress legend,
+            #buddypress .label {
+                color: var(--pm-gold) !important;
+                font-size: 1.1rem !important;
+                font-weight: 700 !important;
+                margin: 25px 0 10px 0 !important;
+                text-transform: uppercase !important;
+                border-bottom: 2px solid #333 !important;
+                border-color: #333 !important; /* Ensure border color override works */
+                padding-bottom: 5px !important;
+                width: 100% !important;
+                display: block !important;
+            }
+
+            /* --- LABELS --- */
+            #buddypress label {
+                color: var(--pm-text-muted) !important;
+                font-size: 0.85rem !important;
+                font-weight: 600 !important;
+                text-transform: uppercase !important;
+                margin-bottom: 8px !important;
+                display: block !important;
+            }
+
+            /* --- FIELD SPACING --- */
+            #buddypress .editfield {
+                margin-bottom: 30px !important;
+            }
+            
+            /* --- DATE BOX FIX --- */
+            #buddypress .editfield.datebox {
+                display: flex !important;
+                gap: 10px !important;
+            }
+            #buddypress .editfield.datebox label { display: none !important; }
+            
+            /* --- VISIBILITY TOGGLE LINK --- */
+            .field-visibility-settings-toggle a {
+                border: 1px solid #444 !important;
+                border-color: #444 !important;
+                border-radius: 20px !important;
+                padding: 5px 15px !important;
+            }
+>>>>>>> CHANGE
 
             /* --- HEADINGS & LEGENDS --- */
             /* Ensure they are visible and gold */
