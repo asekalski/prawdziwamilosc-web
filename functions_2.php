@@ -2194,8 +2194,10 @@ function lewy_panel_uzytkownika_shortcode()
 
         <div class="widget">
             <h3 class="widget-title">Dodatkowe Opcje</h3>
-            <button id="toggle-numerology-btn" class="widget-button purple"
-                style="width:100%; box-sizing: border-box;">Pokaż Numerologię</button>
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0;">
+                <label for="toggle-numerology-checkbox" style="font-weight: 500; font-size: 0.9em; color: #e0e0e0; cursor: pointer;">Pokaż Numerologię</label>
+                <input type="checkbox" id="toggle-numerology-checkbox" style="width: 20px; height: 20px; cursor: pointer; accent-color: #6a1b9a;">
+            </div>
         </div>
 
         <div class="widget">
@@ -2669,17 +2671,13 @@ function lewy_panel_uzytkownika_shortcode()
                 $(this).find('.widget-arrow').toggleClass('up');
             });
 
-            $('#toggle-numerology-btn').on('click', function (e) {
-                e.preventDefault();
-                const btn = $(this);
+            $('#toggle-numerology-checkbox').on('change', function () {
                 const body = $('body');
 
-                body.toggleClass('show-numerology');
-
-                if (body.hasClass('show-numerology')) {
-                    btn.text('Ukryj Numerologię');
+                if ($(this).is(':checked')) {
+                    body.addClass('show-numerology');
                 } else {
-                    btn.text('Pokaż Numerologię');
+                    body.removeClass('show-numerology');
                 }
             });
 
@@ -7134,6 +7132,18 @@ function pm_mobile_bottom_nav() {
     $messages_slug = function_exists('bp_get_messages_slug') ? bp_get_messages_slug() : 'messages';
     $unread_count = function_exists('messages_get_unread_count') ? messages_get_unread_count() : 0;
     
+    // Get count of users who liked me (only count existing users)
+    $current_user_id = get_current_user_id();
+    $liked_by_users = get_user_meta($current_user_id, 'sk_liked_by_users', true) ?: [];
+    $likes_me_count = 0;
+    if (is_array($liked_by_users)) {
+        foreach ($liked_by_users as $user_id) {
+            if (get_userdata($user_id)) {
+                $likes_me_count++;
+            }
+        }
+    }
+    
     // Get current URL for active state detection
     $current_url = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
     
@@ -7152,11 +7162,16 @@ function pm_mobile_bottom_nav() {
             <span class="pm-nav-label">Odkryj</span>
         </a>
         
-        <a href="<?php echo $user_domain . 'matche/'; ?>" class="pm-nav-item <?php echo $is_matches ? 'active' : ''; ?>">
-            <svg class="pm-nav-icon" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
-            </svg>
-            <span class="pm-nav-label">Pary</span>
+        <a href="<?php echo home_url('/dashboard/?tab=likes-me'); ?>" class="pm-nav-item <?php echo $is_matches ? 'active' : ''; ?>">
+            <span class="pm-nav-icon-wrapper">
+                <svg class="pm-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                </svg>
+                <?php if ($likes_me_count > 0): ?>
+                    <span class="pm-nav-badge pm-nav-badge-yellow"><?php echo $likes_me_count > 99 ? '99+' : $likes_me_count; ?></span>
+                <?php endif; ?>
+            </span>
+            <span class="pm-nav-label">Lubią Mnie</span>
         </a>
         
         <a href="<?php echo $user_domain . $messages_slug . '/'; ?>" class="pm-nav-item <?php echo $is_messages ? 'active' : ''; ?>">
@@ -7241,21 +7256,31 @@ function pm_mobile_bottom_nav() {
         letter-spacing: 0.3px;
     }
     
+    .pm-nav-icon-wrapper {
+        position: relative;
+        display: inline-block;
+    }
+    
     .pm-nav-badge {
         position: absolute;
-        top: 2px;
-        right: 8px;
+        top: -4px;
+        right: -12px;
         background: #ff4757;
         color: white;
         font-size: 10px;
         font-weight: bold;
-        min-width: 16px;
-        height: 16px;
-        border-radius: 8px;
+        min-width: 18px;
+        height: 18px;
+        border-radius: 9px;
         display: flex;
         align-items: center;
         justify-content: center;
         padding: 0 4px;
+    }
+    
+    .pm-nav-badge-yellow {
+        background: #ffc107;
+        color: #333;
     }
     </style>
     <?php
@@ -8417,6 +8442,15 @@ function pm_mobile_member_tabs() {
                 </label>
             </div>
             
+            <!-- Show Numerology Toggle -->
+            <div class="pm-filter-row pm-toggle-row">
+                <span class="pm-filter-name">Pokaż Numerologię</span>
+                <label class="pm-toggle">
+                    <input type="checkbox" id="pm-show-numerology" onchange="document.body.classList.toggle('show-numerology', this.checked);">
+                    <span class="pm-toggle-slider"></span>
+                </label>
+            </div>
+            
             <!-- Filter List -->
             <!-- Filter List -->
             <div class="pm-filter-list">
@@ -8983,7 +9017,7 @@ function pm_mobile_member_tabs() {
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(255,255,255,0.2);
+        background: rgba(120, 120, 140, 0.6);
         transition: 0.3s;
         border-radius: 28px;
     }
@@ -9079,52 +9113,66 @@ function pm_mobile_member_tabs() {
         // Default tab is 'search' which should show original content
         // Don't add pm-tabs-active class initially
         
+        // Check URL for tab parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlTab = urlParams.get('tab');
         let currentTab = 'search';
         
-        tabs.forEach(tab => {
-            tab.addEventListener('click', async function() {
-                const tabId = this.dataset.tab;
-                if (tabId === currentTab) return;
+        // Function to switch tab (extracted for reuse)
+        async function switchToTab(tabId) {
+            if (tabId === currentTab) return;
+            
+            // Update active state
+            tabs.forEach(t => t.classList.remove('active'));
+            const targetTab = document.querySelector(`.pm-mtab[data-tab="${tabId}"]`);
+            if (targetTab) targetTab.classList.add('active');
+            currentTab = tabId;
+            
+            // Show/hide content based on tab
+            if (tabId === 'search') {
+                // Show original BuddyPress content
+                loader.style.display = 'none';
+                content.style.display = 'none';
+                if (originalContent) originalContent.style.display = '';
+                document.body.classList.remove('pm-tabs-active');
+            } else {
+                // Load AJAX content
+                if (originalContent) originalContent.style.display = 'none';
+                content.style.display = 'block';
+                loader.style.display = 'block';
+                document.body.classList.add('pm-tabs-active');
                 
-                // Update active state
-                tabs.forEach(t => t.classList.remove('active'));
-                this.classList.add('active');
-                currentTab = tabId;
-                
-                // Show/hide content based on tab
-                if (tabId === 'search') {
-                    // Show original BuddyPress content
-                    loader.style.display = 'none';
-                    content.style.display = 'none';
-                    if (originalContent) originalContent.style.display = '';
-                    document.body.classList.remove('pm-tabs-active');
-                } else {
-                    // Load AJAX content
-                    if (originalContent) originalContent.style.display = 'none';
-                    content.style.display = 'block';
-                    loader.style.display = 'block';
-                    document.body.classList.add('pm-tabs-active');
+                try {
+                    const endpoint = getEndpoint(tabId);
+                    const response = await fetch(endpoint, {
+                        credentials: 'same-origin',
+                        headers: {
+                            'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>'
+                        }
+                    });
                     
-                    try {
-                        const endpoint = getEndpoint(tabId);
-                        const response = await fetch(endpoint, {
-                            credentials: 'same-origin',
-                            headers: {
-                                'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>'
-                            }
-                        });
-                        
-                        if (!response.ok) throw new Error('API error');
-                        
-                        const data = await response.json();
-                        loader.style.display = 'none';
-                        renderMembers(data, tabId);
-                    } catch (error) {
-                        console.error('Error loading tab:', error);
-                        loader.style.display = 'none';
-                        content.innerHTML = '<div class="pm-empty-state"><p>Błąd ładowania danych</p></div>';
-                    }
+                    if (!response.ok) throw new Error('API error');
+                    
+                    const data = await response.json();
+                    loader.style.display = 'none';
+                    renderMembers(data, tabId);
+                } catch (error) {
+                    console.error('Tab loading error:', error);
+                    loader.style.display = 'none';
+                    content.innerHTML = '<p style="text-align:center;padding:40px;color:#999;">Nie udało się załadować danych</p>';
                 }
+            }
+        }
+        
+        // If URL has tab parameter, switch to that tab on load
+        if (urlTab && ['search', 'liked', 'likes-me', 'matches'].includes(urlTab)) {
+            setTimeout(() => switchToTab(urlTab), 100);
+        }
+        
+        tabs.forEach(tab => {
+            tab.addEventListener('click', function() {
+                const tabId = this.dataset.tab;
+                switchToTab(tabId);
             });
         });
         
