@@ -8927,8 +8927,8 @@ function pm_mobile_member_tabs() {
         bottom: 0;
         left: 0;
         right: 0;
-        padding: 50px 15px 15px 15px;
-        background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 50%, transparent 100%);
+        padding: 80px 15px 25px 15px;
+        background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.8) 30%, rgba(0,0,0,0.4) 60%, transparent 100%);
     }
     
     .pm-swipe-card-name {
