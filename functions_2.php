@@ -7737,13 +7737,13 @@ function sk_get_members_endpoint($request) {
                 'hires_avatar' => ['large' => $hires_avatar_large, 'full' => $hires_avatar_full],
                 'last_activity' => $last_activity_formatted,
                 'age' => $age,
-                'zodiac' => $zodiac,
-                'faith' => $faith_val,
-                'politics' => $politics_val,
-                'work' => $work_val,
-                'diet' => $diet_val,
+                'zodiac' => $zodiac ?: null,
+                'faith' => $faith_val ?: null,
+                'politics' => $politics_val ?: null,
+                'work' => $work_val ?: null,
+                'diet' => $diet_val ?: null,
                 'numerology' => $numerology,
-                'bio' => $bio,
+                'bio' => $bio ?: null,
             ];
         }
         return rest_ensure_response($results);
