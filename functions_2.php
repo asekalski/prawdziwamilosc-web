@@ -808,6 +808,51 @@ function grid_uzytkownikow_shortcode()
             color: #f4d03f;
         }
 
+        .premium-badge {
+            display: inline-block;
+            margin-left: 6px;
+            font-size: 1rem;
+            animation: premiumGlow 2s ease-in-out infinite;
+        }
+
+        /* HEADER AVATAR BADGE */
+        .avatar-wrapper-premium {
+            position: relative;
+            display: inline-block;
+            line-height: 0; /* Fix for extra space below img */
+        }
+        
+        .avatar-wrapper-premium .avatar-premium-badge {
+            /* Position relative to wrapping span */
+            position: absolute !important; 
+            top: -2px !important;
+            right: -2px !important;
+            font-size: 14px !important;
+            z-index: 9999 !important;
+            filter: drop-shadow(0 0 4px gold);
+            animation: premiumGlow 2s ease-in-out infinite;
+            line-height: 1;
+        }
+
+        .avatar-premium-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            font-size: 1.5rem;
+            z-index: 10;
+            filter: drop-shadow(0 0 4px gold);
+            animation: premiumGlow 2s ease-in-out infinite;
+        }
+
+        .user-card-avatar {
+            position: relative;
+        }
+
+        @keyframes premiumGlow {
+            0%, 100% { filter: drop-shadow(0 0 2px gold); }
+            50% { filter: drop-shadow(0 0 8px gold); }
+        }
+
         /* Match Indicator */
         .match-indicator {
             font-size: 0.875rem;
@@ -1213,6 +1258,96 @@ function sk_migrate_old_visitor_data()
         }
     }
 }
+
+// =========================================================
+// PREMIUM BADGE HEADER FIX (JS INJECTION - ROBUST V2)
+// =========================================================
+add_action('wp_footer', 'sk_add_header_avatar_badge_script');
+function sk_add_header_avatar_badge_script() {
+    if (!is_user_logged_in()) return;
+    
+    $user_id = get_current_user_id();
+    $is_premium = sk_is_premium_user($user_id);
+
+    if (!$is_premium) return;
+    ?>
+    <script>
+    (function() {
+        function log(msg) { console.log('[Premium Badge]: ' + msg); }
+
+        function addPremiumBadgeToHeader() {
+            // Broad selectors for any likely header avatar
+            const potentialAvatars = document.querySelectorAll(
+                'header img, .site-header img, #masthead img, .ast-mobile-header-wrap img, .elementor-widget-image img, .menu-item img, .nav-menu img'
+            );
+
+            log('Found ' + potentialAvatars.length + ' potential images in header areas.');
+
+            let badgesAdded = 0;
+
+            potentialAvatars.forEach(img => {
+                // Filter: Must be small (icon size), likely square-ish, and not the logo
+                const rect = img.getBoundingClientRect();
+                const size = Math.max(rect.width, rect.height);
+                const ratio = rect.width / rect.height;
+
+                // Rules for identifying a profile avatar:
+                // 1. Size between 15px and 100px
+                // 2. Aspect ratio close to 1 (square/circle)
+                // 3. Not containing "logo" in class or src (unless it's a user logo?)
+                // 4. parent is unlikely to be the main branding
+                
+                const isLogo = img.className.includes('logo') || img.src.includes('logo') || img.parentNode.className.includes('brand');
+                const isIconSize = size > 15 && size < 120;
+                const isSquareish = ratio > 0.8 && ratio < 1.2;
+
+                if (isIconSize && isSquareish && !isLogo) {
+                    // Check if already badged
+                    const parent = img.parentNode;
+                    if (parent.querySelector('.sk-header-badge')) return;
+
+                    log('Targeting avatar: ' + img.src);
+
+                    // Force parent position
+                    const style = window.getComputedStyle(parent);
+                    if (style.position === 'static') parent.style.position = 'relative';
+                    if (style.overflow === 'hidden') parent.style.overflow = 'visible';
+
+                    // Create Badge
+                    const badge = document.createElement('span');
+                    badge.className = 'sk-header-badge';
+                    badge.innerHTML = '⭐';
+                    badge.style.cssText = `
+                        position: absolute;
+                        top: -5px;
+                        right: -5px;
+                        z-index: 2147483647; /* MAX Z-INDEX */
+                        font-size: 14px;
+                        line-height: 1;
+                        filter: drop-shadow(0 0 2px rgba(0,0,0,0.5));
+                        pointer-events: none;
+                        display: block !important;
+                        visibility: visible !important;
+                        opacity: 1 !important;
+                    `;
+                    
+                    parent.appendChild(badge);
+                    badgesAdded++;
+                }
+            });
+
+            if (badgesAdded > 0) log('Successfully added ' + badgesAdded + ' badges.');
+        }
+
+        // Run on load and periodically to catch AJAX updates (like Elementor popups)
+        window.addEventListener('load', addPremiumBadgeToHeader);
+        document.addEventListener('DOMContentLoaded', addPremiumBadgeToHeader);
+        setInterval(addPremiumBadgeToHeader, 2000); // Polling for SPA/AJAX changes
+    })();
+    </script>
+    <?php
+}
+
 
 // Wywołaj migrację przy aktywacji (opcjonalnie)
 // register_activation_hook(__FILE__, 'sk_migrate_old_visitor_data');
@@ -3594,6 +3729,10 @@ function ajax_filter_users_grid_callback()
                 $numerologyHTML_card = '<div class="detail-item numerology-display"><strong>Numerologia:</strong> ' . $numerology_number_card . '</div>';
             }
 
+            // Check if user is premium
+            $is_premium_user = sk_is_premium_user($user_id);
+            $premium_badge = $is_premium_user ? '<span class="premium-badge" title="Użytkownik Premium">⭐</span>' : '';
+
             echo '<a href="' . bp_get_member_permalink() . '" class="user-card-link">';
             echo '  <div class="card-header">';
             echo '      <h3 class="user-name">' . bp_get_member_name() . '</h3>';
@@ -3611,6 +3750,8 @@ function ajax_filter_users_grid_callback()
             echo '      <div class="user-card-avatar">';
             echo bp_member_avatar('type=full&width=400&height=400');
             echo $activity_indicator_html;
+            // DEBUG: Always show badge to test CSS (remove after testing)
+            echo '<span class="avatar-premium-badge">⭐</span>';
             echo '      </div>';
             echo '      <div class="user-card-info">';
             echo '          <p class="user-location">' . (xprofile_get_field_data('Lokalizacja', $user_id) ?: 'Brak lokalizacji') . '</p>';
@@ -4445,6 +4586,81 @@ function brighten_all_navigation()
     <?php
 }
 add_action('wp_head', 'brighten_all_navigation', 99999);
+
+// === FIX MOBILE NAVIGATION TABS VISIBILITY ===
+function pm_fix_mobile_nav_tabs_visibility() {
+    ?>
+    <style>
+        /* Fix for mobile navigation tabs - ensure visibility */
+        @media (max-width: 768px) {
+            /* BuddyPress profile navigation tabs */
+            #item-nav ul li a,
+            #object-nav ul li a,
+            .item-list-tabs ul li a,
+            .type-nav ul li a,
+            nav.bp-navs ul li a,
+            #subnav ul li a {
+                background: rgba(26, 26, 46, 0.85) !important;
+                color: #ffffff !important;
+                padding: 8px 12px !important;
+                border-radius: 6px !important;
+                margin: 2px !important;
+                display: inline-block !important;
+            }
+            
+            /* Active/current tab */
+            #item-nav ul li.current a,
+            #item-nav ul li.selected a,
+            #object-nav ul li.current a,
+            .item-list-tabs ul li.current a,
+            .type-nav ul li.current a,
+            nav.bp-navs ul li.current a,
+            nav.bp-navs ul li.selected a {
+                background: linear-gradient(135deg, #bc6ff1, #7F53AC) !important;
+                color: #ffffff !important;
+            }
+            
+            /* Navigation container */
+            #item-nav,
+            #object-nav,
+            .item-list-tabs,
+            nav.bp-navs {
+                background: transparent !important;
+                overflow-x: auto !important;
+                white-space: nowrap !important;
+                -webkit-overflow-scrolling: touch !important;
+            }
+            
+            /* Nav list */
+            #item-nav ul,
+            #object-nav ul,
+            .item-list-tabs ul,
+            nav.bp-navs ul {
+                display: flex !important;
+                flex-wrap: wrap !important;
+                gap: 4px !important;
+                padding: 8px !important;
+                margin: 0 !important;
+                list-style: none !important;
+            }
+            
+            /* Count badges */
+            #item-nav .count,
+            #object-nav .count,
+            .item-list-tabs .count,
+            nav.bp-navs .count {
+                background: linear-gradient(135deg, #bc6ff1, #7F53AC) !important;
+                color: #fff !important;
+                font-size: 11px !important;
+                padding: 2px 6px !important;
+                border-radius: 10px !important;
+                margin-left: 4px !important;
+            }
+        }
+    </style>
+    <?php
+}
+add_action('wp_head', 'pm_fix_mobile_nav_tabs_visibility', 100000);
 
 // === SHORTCODE REJESTRACJI KROK 1 ===
 function rejestracja_krok1_shortcode()
@@ -6185,7 +6401,21 @@ function my_force_bp_avatar_html($html, $params)
             $class = isset($params['class']) ? $params['class'] : 'avatar';
             $alt = isset($params['alt']) ? $params['alt'] : 'Profile Picture';
 
-            return "<img src='{$img_src[0]}' alt='{$alt}' class='{$class}' width='{$width}' height='{$height}' />";
+            $img_html = "<img src='{$img_src[0]}' alt='{$alt}' class='{$class}' width='{$width}' height='{$height}' />";
+
+            // --- PREMIUM BADGE INJECTION (HEADER/GLOBAL) ---
+            // Check if user is premium
+            $is_premium = sk_is_premium_user($user_id);
+
+            if ($is_premium) {
+                // Return wrapped avatar with badge
+                // Note: We use inline styles for the wrapper to ensure it doesn't break layout too much,
+                // but specific positioning might need tweaking depending on where this avatar is used.
+                $badge_html = '<span class="avatar-premium-badge" style="position: absolute; top: -5px; right: -5px; z-index: 999; font-size: 14px;">⭐</span>';
+                return '<span class="avatar-wrapper-premium" style="position: relative; display: inline-block;">' . $img_html . $badge_html . '</span>';
+            }
+
+            return $img_html;
         }
     }
 
@@ -6194,6 +6424,39 @@ function my_force_bp_avatar_html($html, $params)
 
 // 3. Podmiana samego URL-a (dla motywów, które pobierają tylko link)
 add_filter('bp_core_fetch_avatar_url', 'my_force_bp_avatar_url', 10, 2);
+
+// 4. GLOBAL WP AVATAR FILTER (COVERS DASHBOARD/HEADER)
+add_filter('get_avatar', 'my_force_wp_avatar_html', 10, 5);
+function my_force_wp_avatar_html($avatar, $id_or_email, $size, $default, $alt) {
+    // Resolve User ID
+    $user_id = 0;
+    if (is_numeric($id_or_email)) {
+        $user_id = (int) $id_or_email;
+    } elseif (is_string($id_or_email) && ($user = get_user_by('email', $id_or_email))) {
+        $user_id = $user->ID;
+    } elseif (is_object($id_or_email) && !empty($id_or_email->user_id)) {
+        $user_id = (int) $id_or_email->user_id;
+    } elseif ($id_or_email instanceof WP_User) {
+        $user_id = $id_or_email->ID;
+    } elseif ($id_or_email instanceof WP_Post) {
+        $user_id = (int) $id_or_email->post_author;
+    }
+
+    if (!$user_id) return $avatar;
+
+    // --- PREMIUM BADGE INJECTION ---
+    $is_premium = sk_is_premium_user($user_id);
+
+    if ($is_premium) {
+        // Ensure we don't double-wrap if it's already wrapped (though usually safe)
+        if (strpos($avatar, 'avatar-wrapper-premium') !== false) return $avatar;
+
+        $badge_html = '<span class="avatar-premium-badge" style="position: absolute; top: -5px; right: -5px; z-index: 99999; font-size: 14px;">⭐</span>';
+        return '<span class="avatar-wrapper-premium" style="position: relative; display: inline-block;">' . $avatar . $badge_html . '</span>';
+    }
+
+    return $avatar;
+}
 function my_force_bp_avatar_url($url, $params)
 {
     if (empty($params['item_id']))
@@ -7180,13 +7443,15 @@ function pm_mobile_bottom_nav() {
         </a>
         
         <a href="<?php echo $user_domain . $messages_slug . '/'; ?>" class="pm-nav-item <?php echo $is_messages ? 'active' : ''; ?>">
-            <svg class="pm-nav-icon" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
-            </svg>
+            <span class="pm-nav-icon-wrapper">
+                <svg class="pm-nav-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
+                </svg>
+                <?php if ($unread_count > 0): ?>
+                    <span class="pm-nav-badge" id="pm-nav-badge-messages"><?php echo $unread_count > 9 ? '9+' : $unread_count; ?></span>
+                <?php endif; ?>
+            </span>
             <span class="pm-nav-label">Wiadomości</span>
-            <?php if ($unread_count > 0): ?>
-                <span class="pm-nav-badge" id="pm-nav-badge-messages"><?php echo $unread_count > 9 ? '9+' : $unread_count; ?></span>
-            <?php endif; ?>
         </a>
         
         <a href="<?php echo $user_domain; ?>" class="pm-nav-item <?php echo $is_profile ? 'active' : ''; ?>">
@@ -7198,9 +7463,11 @@ function pm_mobile_bottom_nav() {
     </nav>
     
     <style>
-    /* Mobile Bottom Navigation - only visible on mobile */
+    /* Bottom Navigation - visible on all screen widths */
     .pm-bottom-nav {
-        display: none;
+        display: flex;
+        justify-content: space-around;
+        align-items: center;
         position: fixed;
         bottom: 0;
         left: 0;
@@ -7213,23 +7480,15 @@ function pm_mobile_bottom_nav() {
         box-shadow: 0 -2px 10px rgba(0,0,0,0.3);
     }
     
-    @media (max-width: 767px) {
-        .pm-bottom-nav {
-            display: flex;
-            justify-content: space-around;
-            align-items: center;
-        }
-        
-        /* Add padding to body so content doesn't hide behind nav */
-        body.logged-in {
-            padding-bottom: calc(60px + env(safe-area-inset-bottom, 0)) !important;
-        }
-        
-        /* Better Messages fullscreen fix - account for bottom nav */
-        .bp-messages-wrap.mobile-ready.bp-messages-mobile {
-            height: calc(100vh - 145px) !important;
-            max-height: calc(100vh - 145px) !important;
-        }
+    /* Add padding to body so content doesn't hide behind nav */
+    body.logged-in {
+        padding-bottom: calc(60px + env(safe-area-inset-bottom, 0)) !important;
+    }
+    
+    /* Better Messages fullscreen fix - account for bottom nav */
+    .bp-messages-wrap.mobile-ready.bp-messages-mobile {
+        height: calc(100vh - 145px) !important;
+        max-height: calc(100vh - 145px) !important;
     }
     
     .pm-nav-item {
@@ -7268,19 +7527,20 @@ function pm_mobile_bottom_nav() {
     
     .pm-nav-badge {
         position: absolute;
-        top: -4px;
-        right: -12px;
+        top: -6px;
+        right: -8px;
         background: #ff4757;
         color: white;
-        font-size: 10px;
+        font-size: 9px;
         font-weight: bold;
-        min-width: 18px;
-        height: 18px;
-        border-radius: 9px;
+        min-width: 16px;
+        height: 16px;
+        border-radius: 8px;
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 0 4px;
+        padding: 0 3px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
     }
     
     .pm-nav-badge-yellow {
@@ -8420,6 +8680,549 @@ function sk_send_message_endpoint($request) {
     return new WP_Error('no_messaging_system', 'BuddyPress messaging not available', ['status' => 500]);
 }
 
+// ========================================
+// Super Wiadomość (Super Message) Feature
+// Premium users can send messages without matching
+// ========================================
+
+add_action('rest_api_init', function () {
+    // Send Super Message
+    register_rest_route('sk/v1', '/super-message/send', [
+        'methods' => 'POST',
+        'callback' => 'sk_super_message_send',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+    
+    // Respond to Super Message
+    register_rest_route('sk/v1', '/super-message/respond', [
+        'methods' => 'POST',
+        'callback' => 'sk_super_message_respond',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+    
+    // Get inbox (received Super Messages)
+    register_rest_route('sk/v1', '/super-message/inbox', [
+        'methods' => 'GET',
+        'callback' => 'sk_super_message_inbox',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+    
+    // Get status (sent messages + remaining count)
+    register_rest_route('sk/v1', '/super-message/status', [
+        'methods' => 'GET',
+        'callback' => 'sk_super_message_status',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+    
+    // Admin: Reset Super Message data (for testing)
+    register_rest_route('sk/v1', '/super-message/reset', [
+        'methods' => 'POST',
+        'callback' => 'sk_super_message_reset',
+        'permission_callback' => function() {
+            return current_user_can('administrator');
+        }
+    ]);
+});
+
+/**
+ * Check if user is premium
+ */
+function sk_is_premium_user($user_id) {
+    // Check if user has premium role or membership
+    $user = get_userdata($user_id);
+    if (!$user) return false;
+    
+    // Check if ANY role contains 'premium' (case-insensitive)
+    $user_roles = (array)$user->roles;
+    foreach ($user_roles as $role) {
+        // Convert to lowercase for comparison
+        $role_lower = strtolower($role);
+        if (strpos($role_lower, 'premium') !== false) {
+            return true;
+        }
+    }
+    
+    // Check BuddyPress Member Type (Rodzaj członka)
+    if (function_exists('bp_get_member_type')) {
+        $member_type = bp_get_member_type($user_id);
+        if ($member_type && (stripos($member_type, 'premium') !== false)) {
+            return true;
+        }
+        // Also check for array of types
+        $member_types = bp_get_member_type($user_id, false);
+        if (is_array($member_types)) {
+            foreach ($member_types as $type) {
+                if (stripos($type, 'premium') !== false) {
+                    return true;
+                }
+            }
+        }
+    }
+    
+    // Check PaidMembershipsPro
+    if (function_exists('pmpro_hasMembershipLevel')) {
+        if (pmpro_hasMembershipLevel(null, $user_id)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+/**
+ * Get remaining Super Messages for this week (rolling 7 days)
+ */
+function sk_get_remaining_super_messages($user_id) {
+    $week_data = get_user_meta($user_id, 'sk_super_messages_week', true);
+    $now = time();
+    $week_ago = $now - (7 * 24 * 60 * 60);
+    
+    if (!is_array($week_data)) {
+        $week_data = [];
+    }
+    
+    // Filter to only messages sent in last 7 days
+    $recent = array_filter($week_data, function($timestamp) use ($week_ago) {
+        return $timestamp > $week_ago;
+    });
+    
+    $used = count($recent);
+    $limit = 3;
+    
+    return max(0, $limit - $used);
+}
+
+/**
+ * Record a Super Message sent
+ */
+function sk_record_super_message_sent($user_id) {
+    $week_data = get_user_meta($user_id, 'sk_super_messages_week', true);
+    if (!is_array($week_data)) {
+        $week_data = [];
+    }
+    $week_data[] = time();
+    update_user_meta($user_id, 'sk_super_messages_week', $week_data);
+}
+
+/**
+ * Check cooldown for specific recipient
+ */
+function sk_check_cooldown($sender_id, $recipient_id) {
+    $cooldowns = get_user_meta($sender_id, 'sk_super_message_cooldowns', true);
+    if (!is_array($cooldowns)) {
+        return false; // No cooldown
+    }
+    
+    $key = 'user_' . $recipient_id;
+    if (isset($cooldowns[$key])) {
+        $cooldown_until = strtotime($cooldowns[$key]);
+        if (time() < $cooldown_until) {
+            return $cooldowns[$key]; // Return cooldown end date
+        }
+    }
+    
+    return false;
+}
+
+/**
+ * Set cooldown for recipient (7 days)
+ */
+function sk_set_cooldown($sender_id, $recipient_id) {
+    $cooldowns = get_user_meta($sender_id, 'sk_super_message_cooldowns', true);
+    if (!is_array($cooldowns)) {
+        $cooldowns = [];
+    }
+    
+    $key = 'user_' . $recipient_id;
+    $cooldowns[$key] = date('c', time() + (7 * 24 * 60 * 60)); // 7 days from now
+    update_user_meta($sender_id, 'sk_super_message_cooldowns', $cooldowns);
+}
+
+/**
+ * Send Super Message endpoint
+ */
+function sk_super_message_send($request) {
+    $sender_id = get_current_user_id();
+    $recipient_id = intval($request->get_param('to_user_id'));
+    $message = sanitize_textarea_field($request->get_param('message'));
+    
+    // Check if premium
+    if (!sk_is_premium_user($sender_id)) {
+        return new WP_Error('not_premium', 'Tylko użytkownicy Premium mogą wysyłać Super Wiadomości', ['status' => 403]);
+    }
+    
+    // Check weekly limit
+    $remaining = sk_get_remaining_super_messages($sender_id);
+    if ($remaining <= 0) {
+        return new WP_Error('weekly_limit_reached', 'Wykorzystałeś limit 3 Super Wiadomości na ten tydzień', ['status' => 429]);
+    }
+    
+    // Check cooldown for this recipient
+    $cooldown = sk_check_cooldown($sender_id, $recipient_id);
+    if ($cooldown) {
+        return new WP_Error('cooldown_active', 'Musisz poczekać do ' . $cooldown . ' przed wysłaniem kolejnej wiadomości do tego użytkownika', ['status' => 429]);
+    }
+    
+    // Check if already sent pending message to this user
+    $sent = get_user_meta($sender_id, 'sk_super_messages_sent', true);
+    if (is_array($sent)) {
+        foreach ($sent as $msg) {
+            if ($msg['to'] == $recipient_id && $msg['status'] === 'pending') {
+                return new WP_Error('already_sent', 'Masz już oczekującą Super Wiadomość do tego użytkownika', ['status' => 400]);
+            }
+        }
+    }
+    
+    // Validate message
+    if (empty($message) || strlen($message) < 10) {
+        return new WP_Error('message_too_short', 'Wiadomość musi mieć minimum 10 znaków', ['status' => 400]);
+    }
+    
+    if (strlen($message) > 500) {
+        return new WP_Error('message_too_long', 'Wiadomość może mieć maksimum 500 znaków', ['status' => 400]);
+    }
+    
+    // Generate message ID
+    $message_id = 'sm_' . $sender_id . '_' . $recipient_id . '_' . time();
+    
+    // ===== SEND VIA BETTER MESSAGES (or BuddyPress fallback) =====
+    $bp_message_id = false;
+    $bp_thread_id = null;
+    $sender = get_userdata($sender_id);
+    $sender_name = $sender ? $sender->display_name : 'Ktoś';
+    
+    $message_content = '<div class="super-message-content" style="background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%); border: 2px solid #FFD700; border-radius: 12px; padding: 16px; color: #fff; margin-bottom: 12px;">
+<div style="color: #FFD700; font-weight: bold; margin-bottom: 8px;">⭐ Super Wiadomość</div>
+<div style="color: #fff;">' . esc_html($message) . '</div>
+<div style="font-size: 10px; font-style: italic; color: #333; margin-top: 12px; background: linear-gradient(135deg, #ffd700 0%, #ffeb3b 100%); padding: 8px 10px; border-radius: 6px;">Ta wiadomość została wysłana jako Super Wiadomość Premium. Możesz odpowiedzieć, aby rozpocząć rozmowę. Nie odpowiadaj, jeśli nie chcesz.</div>
+</div>';
+    
+    error_log('Super Message: attempting to send from ' . $sender_id . ' to ' . $recipient_id);
+    
+    // Try Better Messages first (if available)
+    if (class_exists('Better_Messages') && function_exists('Better_Messages')) {
+        error_log('Super Message: Using Better Messages API');
+        
+        try {
+            $bm_args = [
+                'sender_id'    => $sender_id,
+                'recipients'   => [$recipient_id],
+                'subject'      => '⭐ Super Wiadomość od ' . $sender_name,
+                'content'      => $message_content,
+                'return'       => 'thread_id'
+            ];
+            
+            $result = Better_Messages()->functions->new_message($bm_args);
+            
+            error_log('Super Message: Better Messages returned: ' . print_r($result, true));
+            
+            if (is_wp_error($result)) {
+                error_log('Super Message Better Messages error: ' . $result->get_error_message());
+                return new WP_Error('bm_send_failed', 'Nie udało się wysłać wiadomości: ' . $result->get_error_message(), ['status' => 500]);
+            }
+            
+            if ($result && is_numeric($result)) {
+                $bp_thread_id = $result;
+                error_log('Super Message: Better Messages created thread_id: ' . $bp_thread_id);
+            } else {
+                error_log('Super Message: Better Messages returned unexpected result');
+                return new WP_Error('bm_send_failed', 'Better Messages nie mógł wysłać wiadomości', ['status' => 500]);
+            }
+            
+        } catch (Exception $e) {
+            error_log('Super Message: Better Messages exception: ' . $e->getMessage());
+            return new WP_Error('bm_exception', 'Błąd Better Messages: ' . $e->getMessage(), ['status' => 500]);
+        }
+        
+    } elseif (function_exists('messages_new_message')) {
+        // Fallback to BuddyPress
+        error_log('Super Message: Using BuddyPress messages_new_message fallback');
+        
+        $bp_message_id = messages_new_message([
+            'sender_id' => $sender_id,
+            'recipients' => [$recipient_id],
+            'subject' => '⭐ Super Wiadomość od ' . $sender_name,
+            'content' => $message_content,
+            'error_type' => 'wp_error'
+        ]);
+        
+        error_log('Super Message: messages_new_message returned: ' . print_r($bp_message_id, true));
+        
+        if (is_wp_error($bp_message_id)) {
+            error_log('Super Message BuddyPress error: ' . $bp_message_id->get_error_message());
+            return new WP_Error('bp_send_failed', 'Nie udało się wysłać wiadomości: ' . $bp_message_id->get_error_message(), ['status' => 500]);
+        }
+        
+        if (!$bp_message_id) {
+            error_log('Super Message: BP returned false/null');
+            return new WP_Error('bp_send_failed', 'BuddyPress nie mógł wysłać wiadomości', ['status' => 500]);
+        }
+        
+        // Get thread_id from message_id
+        global $wpdb;
+        $bp = buddypress();
+        if (isset($bp->messages->table_name_messages)) {
+            $bp_thread_id = $wpdb->get_var($wpdb->prepare(
+                "SELECT thread_id FROM {$bp->messages->table_name_messages} WHERE id = %d",
+                $bp_message_id
+            ));
+            error_log('Super Message: Got thread_id ' . $bp_thread_id . ' from message_id ' . $bp_message_id);
+        }
+        
+    } else {
+        error_log('Super Message: No messaging system available!');
+        return new WP_Error('no_messaging', 'System wiadomości nie jest dostępny', ['status' => 500]);
+    }
+    
+    // Store in sender's sent list
+    if (!is_array($sent)) $sent = [];
+    $sent[] = [
+        'id' => $message_id,
+        'bp_thread_id' => $bp_thread_id ?: null,
+        'to' => $recipient_id,
+        'message' => $message,
+        'timestamp' => date('c'),
+        'status' => 'pending' // pending, read, accepted, rejected, blocked
+    ];
+    update_user_meta($sender_id, 'sk_super_messages_sent', $sent);
+    
+    // Store in recipient's inbox
+    $inbox = get_user_meta($recipient_id, 'sk_super_messages_received', true);
+    if (!is_array($inbox)) $inbox = [];
+    $inbox[] = [
+        'id' => $message_id,
+        'bp_thread_id' => $bp_thread_id ?: null,
+        'from' => $sender_id,
+        'message' => $message,
+        'timestamp' => date('c'),
+        'read' => false
+    ];
+    update_user_meta($recipient_id, 'sk_super_messages_received', $inbox);
+    
+    // Record usage for weekly limit
+    sk_record_super_message_sent($sender_id);
+    
+    return rest_ensure_response([
+        'success' => true,
+        'message_id' => $message_id,
+        'bp_thread_id' => $bp_thread_id ?: null,
+        'remaining_this_week' => sk_get_remaining_super_messages($sender_id)
+    ]);
+}
+
+/**
+ * Respond to Super Message endpoint
+ */
+function sk_super_message_respond($request) {
+    $user_id = get_current_user_id();
+    $message_id = sanitize_text_field($request->get_param('message_id'));
+    $action = sanitize_text_field($request->get_param('action')); // accept, not_now, block
+    
+    // Find message in inbox
+    $inbox = get_user_meta($user_id, 'sk_super_messages_received', true);
+    if (!is_array($inbox)) {
+        return new WP_Error('not_found', 'Wiadomość nie znaleziona', ['status' => 404]);
+    }
+    
+    $message_index = null;
+    $message = null;
+    foreach ($inbox as $i => $msg) {
+        if ($msg['id'] === $message_id) {
+            $message_index = $i;
+            $message = $msg;
+            break;
+        }
+    }
+    
+    if ($message === null) {
+        return new WP_Error('not_found', 'Wiadomość nie znaleziona', ['status' => 404]);
+    }
+    
+    $sender_id = $message['from'];
+    
+    // Update status in sender's sent list
+    $sent = get_user_meta($sender_id, 'sk_super_messages_sent', true);
+    if (is_array($sent)) {
+        foreach ($sent as &$s) {
+            if ($s['id'] === $message_id) {
+                if ($action === 'accept') {
+                    $s['status'] = 'accepted';
+                } elseif ($action === 'not_now') {
+                    $s['status'] = 'rejected';
+                } elseif ($action === 'block') {
+                    $s['status'] = 'blocked';
+                }
+                break;
+            }
+        }
+        update_user_meta($sender_id, 'sk_super_messages_sent', $sent);
+    }
+    
+    // Remove from inbox
+    unset($inbox[$message_index]);
+    $inbox = array_values($inbox);
+    update_user_meta($user_id, 'sk_super_messages_received', $inbox);
+    
+    // Handle specific actions
+    if ($action === 'accept') {
+        // Create a real conversation using BuddyPress messages
+        if (function_exists('messages_new_message')) {
+            messages_new_message([
+                'sender_id' => $sender_id,
+                'recipients' => [$user_id],
+                'subject' => 'Super Wiadomość zaakceptowana',
+                'content' => $message['message']
+            ]);
+        }
+    } elseif ($action === 'not_now') {
+        // Set cooldown for sender
+        sk_set_cooldown($sender_id, $user_id);
+    } elseif ($action === 'block') {
+        // Add sender to skipped users
+        $skipped = get_user_meta($user_id, 'sk_skipped_users', true);
+        if (!is_array($skipped)) $skipped = [];
+        if (!in_array($sender_id, $skipped)) {
+            $skipped[] = $sender_id;
+            update_user_meta($user_id, 'sk_skipped_users', $skipped);
+        }
+        // Set permanent cooldown
+        sk_set_cooldown($sender_id, $user_id);
+    }
+    
+    return rest_ensure_response([
+        'success' => true,
+        'action' => $action
+    ]);
+}
+
+/**
+ * Get Super Message inbox
+ */
+function sk_super_message_inbox($request) {
+    $user_id = get_current_user_id();
+    
+    $inbox = get_user_meta($user_id, 'sk_super_messages_received', true);
+    if (!is_array($inbox)) {
+        return rest_ensure_response(['messages' => []]);
+    }
+    
+    // Mark all as read and enrich with sender info
+    $enriched = [];
+    $updated = false;
+    foreach ($inbox as &$msg) {
+        if (!$msg['read']) {
+            $msg['read'] = true;
+            $updated = true;
+            
+            // Also update sender's status to 'read'
+            $sender_sent = get_user_meta($msg['from'], 'sk_super_messages_sent', true);
+            if (is_array($sender_sent)) {
+                foreach ($sender_sent as &$s) {
+                    if ($s['id'] === $msg['id'] && $s['status'] === 'pending') {
+                        $s['status'] = 'read';
+                    }
+                }
+                update_user_meta($msg['from'], 'sk_super_messages_sent', $sender_sent);
+            }
+        }
+        
+        // Get sender info
+        $sender = get_userdata($msg['from']);
+        $avatar = get_avatar_url($msg['from'], ['size' => 150]);
+        
+        $enriched[] = [
+            'id' => $msg['id'],
+            'from' => [
+                'id' => $msg['from'],
+                'name' => $sender ? $sender->display_name : 'Użytkownik',
+                'avatar' => $avatar,
+                'profile_url' => function_exists('bp_members_get_user_url') ? bp_members_get_user_url($msg['from']) : ''
+            ],
+            'message' => $msg['message'],
+            'timestamp' => $msg['timestamp']
+        ];
+    }
+    
+    if ($updated) {
+        update_user_meta($user_id, 'sk_super_messages_received', $inbox);
+    }
+    
+    return rest_ensure_response(['messages' => $enriched]);
+}
+
+/**
+ * Get Super Message status
+ */
+function sk_super_message_status($request) {
+    $user_id = get_current_user_id();
+    
+    $is_premium = sk_is_premium_user($user_id);
+    $remaining = $is_premium ? sk_get_remaining_super_messages($user_id) : 0;
+    
+    $sent = get_user_meta($user_id, 'sk_super_messages_sent', true);
+    if (!is_array($sent)) $sent = [];
+    
+    // Enrich sent messages
+    $enriched_sent = [];
+    foreach ($sent as $msg) {
+        $recipient = get_userdata($msg['to']);
+        $enriched_sent[] = [
+            'id' => $msg['id'],
+            'to' => [
+                'id' => $msg['to'],
+                'name' => $recipient ? $recipient->display_name : 'Użytkownik'
+            ],
+            'timestamp' => $msg['timestamp'],
+            'status' => $msg['status']
+        ];
+    }
+    
+    // Count inbox
+    $inbox = get_user_meta($user_id, 'sk_super_messages_received', true);
+    $inbox_count = is_array($inbox) ? count($inbox) : 0;
+    
+    return rest_ensure_response([
+        'is_premium' => $is_premium,
+        'remaining_this_week' => $remaining,
+        'sent' => $enriched_sent,
+        'inbox_count' => $inbox_count
+    ]);
+}
+
+/**
+ * Reset Super Message data (Admin only, for testing)
+ */
+function sk_super_message_reset($request) {
+    $current_user_id = get_current_user_id();
+    $target_user_id = $request->get_param('target_user_id') ?: $current_user_id;
+    
+    // Clear sent messages
+    delete_user_meta($target_user_id, 'sk_super_messages_sent');
+    
+    // Clear received messages
+    delete_user_meta($target_user_id, 'sk_super_messages_received');
+    
+    // Clear weekly count
+    delete_user_meta($target_user_id, 'sk_super_messages_weekly_count');
+    
+    // Clear send history (cooldowns)
+    delete_user_meta($target_user_id, 'sk_super_message_history');
+    
+    return rest_ensure_response([
+        'success' => true,
+        'message' => 'Super Message data reset for user ' . $target_user_id
+    ]);
+}
+
 /**
  * Mobile Member Tabs Navigation
  * Adds horizontal tab bar for Members page on mobile (similar to mobile app)
@@ -8469,18 +9272,33 @@ function pm_mobile_member_tabs() {
                     <span class="pm-mh-badge"><?php echo $unread_count > 9 ? '9+' : $unread_count; ?></span>
                 <?php endif; ?>
             </a>
-            <a href="<?php echo esc_url($user_profile_url); ?>" class="pm-mh-avatar">
+            <a href="<?php echo esc_url($user_profile_url); ?>" class="pm-mh-avatar" style="position: relative;">
                 <img src="<?php echo esc_url($avatar_url); ?>" alt="Profil">
+                <?php 
+                // PREMIUM BADGE INJECTION
+                $is_premium = sk_is_premium_user($user_id);
+                if ($is_premium): ?>
+                    <span class="pm-premium-header-badge" style="
+                        position: absolute;
+                        top: -2px;
+                        right: -2px;
+                        font-size: 12px;
+                        line-height: 1;
+                        z-index: 10;
+                        filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
+                        pointer-events: none;
+                    ">⭐</span>
+                <?php endif; ?>
             </a>
         </div>
     </div>
     
     <div class="pm-member-tabs" id="pm-member-tabs">
         <button class="pm-mtab active" data-tab="search">Wyszukaj</button>
-        <button class="pm-mtab" data-tab="liked">Polubieni</button>
-        <button class="pm-mtab" data-tab="likes-me">Lubią Mnie</button>
+        <button class="pm-mtab pm-mtab-premium" data-tab="liked">Polubieni<span class="pm-premium-badge">Premium</span></button>
+        <button class="pm-mtab pm-mtab-premium" data-tab="likes-me">Lubią Mnie<span class="pm-premium-badge">Premium</span></button>
         <button class="pm-mtab" data-tab="matches">Matche</button>
-        <button class="pm-mtab" data-tab="skipped">Usunięci</button>
+        <button class="pm-mtab pm-mtab-premium" data-tab="skipped">Usunięci<span class="pm-premium-badge">Premium</span></button>
     </div>
     
     <div id="pm-tabs-loader" style="display:none; text-align:center; padding:40px;">
@@ -8657,9 +9475,9 @@ function pm_mobile_member_tabs() {
     </div>
 
     <style>
-    /* Mobile Header Bar - visible only on mobile */
+    /* Header Bar - visible on all screen widths */
     .pm-mobile-header {
-        display: none;
+        display: flex;
         align-items: center;
         justify-content: space-between;
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
@@ -8670,18 +9488,6 @@ function pm_mobile_member_tabs() {
         left: 0;
         right: 0;
         z-index: 101;
-    }
-    
-    @media (max-width: 767px) {
-        .pm-mobile-header {
-            display: flex;
-        }
-    }
-    
-    @media (min-width: 768px) {
-        .pm-mobile-header {
-            display: none !important;
-        }
     }
     
     .pm-mh-left,
@@ -8741,50 +9547,43 @@ function pm_mobile_member_tabs() {
         width: 40px;
         height: 40px;
         border-radius: 50%;
-        overflow: hidden;
+        overflow: visible; /* Allow badge to be visible outside */
         border: 2px solid rgba(255,255,255,0.3);
+        position: relative; /* Ensure badge positioning works */
     }
     
     .pm-mh-avatar img {
         width: 100%;
         height: 100%;
         object-fit: cover;
+        border-radius: 50%; /* Apply rounding to image itself */
+        display: block;
     }
     
-    /* Mobile Member Tabs - only visible on mobile */
+    /* Member Tabs - visible on all screen widths */
     .pm-member-tabs {
-        display: none;
-        overflow-x: auto;
+        display: flex;
+        justify-content: space-around;
+        align-items: center;
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
         padding: 12px 15px;
-        gap: 4px;
-        position: sticky;
-        top: 0;
+        position: fixed;
+        top: calc(56px + env(safe-area-inset-top, 0));
+        left: 0;
+        right: 0;
+        width: 100%;
         z-index: 100;
         border-bottom: 1px solid rgba(255,255,255,0.1);
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
     }
     
     .pm-member-tabs::-webkit-scrollbar {
         display: none;
     }
     
-    @media (max-width: 767px) {
-        .pm-member-tabs {
-            display: flex;
-            position: fixed;
-            top: calc(56px + env(safe-area-inset-top, 0));
-            left: 0;
-            right: 0;
-            width: 100%;
-            padding-top: 0;
-        }
-        
-        /* Add padding to body to account for fixed header + tabs - always when tabs visible */
-        body.pm-tabs-visible {
-            padding-top: calc(110px + env(safe-area-inset-top, 0)) !important;
-        }
+    /* Add padding to body to account for fixed header + tabs */
+    body.pm-tabs-visible {
+        padding-top: calc(110px + env(safe-area-inset-top, 0)) !important;
+    }
         
         /* Hide default BuddyPress members search/filter when tabs active */
         .pm-tabs-active .bp-dir-hori-nav,
@@ -8848,6 +9647,27 @@ function pm_mobile_member_tabs() {
         background: linear-gradient(135deg, #2ECC71 0%, #27AE60 100%);
         color: #fff;
         box-shadow: 0 2px 8px rgba(46,204,113,0.3);
+    }
+    
+    /* Premium badge for tabs */
+    .pm-mtab-premium {
+        position: relative;
+        padding-bottom: 16px;
+    }
+    
+    .pm-premium-badge {
+        position: absolute;
+        bottom: 2px;
+        right: 4px;
+        font-size: 8px;
+        font-weight: 700;
+        color: #FFD700;
+        background: #1a1a1a;
+        padding: 1px 4px;
+        border-radius: 3px;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        line-height: 1.2;
     }
     
     .pm-spinner {
@@ -9047,61 +9867,252 @@ function pm_mobile_member_tabs() {
         border-color: #9b59b6;
     }
     
-    /* Action Buttons - Inside Overlay */
+    /* Action Buttons - Inside Overlay (matching mobile app design) */
     .pm-swipe-card-actions {
         display: flex;
         justify-content: center;
-        gap: 30px;
-        padding: 0;
-        margin-top: 15px;
+        align-items: center;
+        gap: 20px;
+        padding: 15px 0;
+        margin-top: 10px;
     }
     
     .pm-action-btn {
-        width: 55px;
-        height: 55px;
+        width: 65px;
+        height: 65px;
         border-radius: 50%;
-        border: 3px solid;
+        border: none;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 26px;
+        font-size: 28px;
         cursor: pointer;
         transition: all 0.2s ease;
-        background: rgba(0,0,0,0.5);
-        backdrop-filter: blur(5px);
+        background: #ffffff;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
     }
     
+    /* Skip button - white with red X */
     .pm-action-btn.pm-action-skip {
-        border-color: #e74c3c;
+        background: #ffffff;
         color: #e74c3c;
     }
     
     .pm-action-btn.pm-action-skip:hover {
-        background: #e74c3c;
-        color: #fff;
         transform: scale(1.1);
+        box-shadow: 0 6px 20px rgba(231, 76, 60, 0.4);
     }
     
+    /* Restore button - white with blue arrow */
     .pm-action-btn.pm-action-restore {
-        border-color: #3498db;
+        background: #ffffff;
         color: #3498db;
     }
     
     .pm-action-btn.pm-action-restore:hover {
-        background: #3498db;
-        color: #fff;
         transform: scale(1.1);
+        box-shadow: 0 6px 20px rgba(52, 152, 219, 0.4);
     }
     
+    /* Like button - white with green heart outline */
     .pm-action-btn.pm-action-like {
-        border-color: #2ecc71;
+        background: #ffffff;
         color: #2ecc71;
     }
     
     .pm-action-btn.pm-action-like:hover {
-        background: #2ecc71;
-        color: #fff;
         transform: scale(1.1);
+        box-shadow: 0 6px 20px rgba(46, 204, 113, 0.4);
+    }
+    
+    /* Super Wiadomość button - dark blue with yellow envelope (matching app) */
+    .pm-action-btn.pm-action-super-msg {
+        background: #1a1a2e !important;
+        border: 3px solid #FFD700 !important;
+        color: transparent !important;
+        font-size: 0 !important;
+        position: relative;
+        width: 65px;
+        height: 65px;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: center !important;
+        align-items: center !important;
+        gap: 0 !important;
+        padding: 0 !important;
+        padding-bottom: 10px !important;
+    }
+    
+    /* Envelope icon from PNG */
+    .pm-action-btn.pm-action-super-msg::before {
+        content: "";
+        display: block;
+        width: 32px;
+        height: 24px;
+        background-image: url("https://prawdziwamilosc.pl/envelope.png");
+        background-repeat: no-repeat;
+        background-size: contain;
+        background-position: center;
+    }
+    
+    .pm-action-btn.pm-action-super-msg::after {
+        content: "Premium";
+        font-size: 8px !important;
+        font-weight: bold;
+        color: #FFD700 !important;
+        letter-spacing: 0.3px;
+        margin-top: 2px;
+        line-height: 1;
+    }
+    
+    .pm-action-btn.pm-action-super-msg:hover {
+        background: #16213e !important;
+        transform: scale(1.1);
+        box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+    }
+    
+    /* Desktop: larger envelope icon */
+    @media (min-width: 768px) {
+        .pm-action-btn.pm-action-super-msg::before {
+            width: 36px;
+            height: 28px;
+        }
+    }
+    
+    /* Super Message Modal */
+    .pm-super-msg-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(0,0,0,0.85);
+        z-index: 10000;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        box-sizing: border-box;
+    }
+    
+    .pm-super-msg-modal.active {
+        display: flex;
+    }
+    
+    .pm-super-msg-content {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        border: 2px solid #FFD700;
+        border-radius: 16px;
+        padding: 24px;
+        max-width: 90vw;
+        width: 350px;
+        color: #fff;
+        box-sizing: border-box;
+    }
+    
+    .pm-super-msg-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+    }
+    
+    .pm-super-msg-title {
+        font-size: 20px;
+        font-weight: bold;
+        color: #FFD700;
+    }
+    
+    .pm-super-msg-close {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 28px;
+        cursor: pointer;
+    }
+    
+    .pm-super-msg-close:hover {
+        color: #fff;
+    }
+    
+    .pm-super-msg-recipient {
+        color: #FFD700;
+        font-size: 16px;
+        margin-bottom: 12px;
+    }
+    
+    .pm-super-msg-textarea {
+        width: 100%;
+        min-height: 120px;
+        padding: 12px;
+        border: 1px solid #444;
+        border-radius: 8px;
+        background: #333;
+        color: #fff;
+        font-size: 14px;
+        resize: none;
+    }
+    
+    .pm-super-msg-textarea:focus {
+        outline: none;
+        border-color: #FFD700;
+    }
+    
+    .pm-super-msg-counter {
+        text-align: right;
+        font-size: 12px;
+        color: #888;
+        margin-top: 4px;
+    }
+    
+    .pm-super-msg-remaining {
+        text-align: center;
+        margin: 16px 0;
+        font-size: 12px;
+        color: #999;
+    }
+    
+    .pm-super-msg-remaining span {
+        color: #FFD700;
+        font-weight: bold;
+    }
+    
+    .pm-super-msg-send {
+        width: 100%;
+        padding: 14px;
+        background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
+        color: #1a1a1a;
+        border: none;
+        border-radius: 8px;
+        font-size: 16px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    
+    .pm-super-msg-send:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(255, 215, 0, 0.4);
+    }
+    
+    .pm-super-msg-send:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+    }
+    
+    /* Super Message Counter in Header */
+    .pm-super-msg-header-counter {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 12px;
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        border: 1px solid #FFD700;
+        border-radius: 20px;
+        font-size: 12px;
+        color: #FFD700;
+        margin-left: 8px;
     }
     
     .pm-empty-state {
@@ -9579,8 +10590,12 @@ function pm_mobile_member_tabs() {
                                 ${tagsHtml ? `<div class="pm-swipe-card-tags">${tagsHtml}</div>` : ''}
                             </div>
                             <div class="pm-swipe-card-actions">
-                                <button class="pm-action-btn pm-action-skip" onclick="event.preventDefault(); event.stopPropagation(); pmSkipUser(${member.id});">✕</button>
-                                <button class="pm-action-btn pm-action-like" onclick="event.preventDefault(); event.stopPropagation(); pmLikeUser(${member.id});">♥</button>
+                                ${tabId === 'liked' 
+                                    ? `<button class="pm-action-btn pm-action-skip" onclick="event.preventDefault(); event.stopPropagation(); pmUnlikeUser(${member.id});">✕</button>`
+                                    : `<button class="pm-action-btn pm-action-skip" onclick="event.preventDefault(); event.stopPropagation(); pmSkipUser(${member.id});">✕</button>
+                                       <button class="pm-action-btn pm-action-super-msg" onclick="event.preventDefault(); event.stopPropagation(); pmOpenSuperMessage(${member.id}, '${name.replace(/'/g, "\\'")}');" title="Super Wiadomość">✉</button>
+                                       <button class="pm-action-btn pm-action-like" onclick="event.preventDefault(); event.stopPropagation(); pmLikeUser(${member.id});">♥</button>`
+                                }
                             </div>
                         </div>
                     </div>
@@ -9656,14 +10671,69 @@ function pm_mobile_member_tabs() {
             localStorage.setItem('pmSkippedUsers', JSON.stringify(skipped));
         };
         
-        // Hide card with animation
-        function hideCard(userId) {
+        // Custom toast notification (replaces alert to prevent mobile layout issues)
+        function showToast(msg, isSuccess = true) {
+            // Remove existing toast
+            const existing = document.getElementById('pm-toast');
+            if (existing) existing.remove();
+            
+            const toast = document.createElement('div');
+            toast.id = 'pm-toast';
+            toast.innerHTML = msg;
+            toast.style.cssText = `
+                position: fixed;
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                padding: 14px 24px;
+                background: ${isSuccess ? 'linear-gradient(135deg, #1a1a1a, #2d2d2d)' : '#c0392b'};
+                border: 2px solid ${isSuccess ? '#FFD700' : '#e74c3c'};
+                color: #fff;
+                border-radius: 12px;
+                font-size: 15px;
+                z-index: 99999;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+                max-width: 90vw;
+                text-align: center;
+                animation: toastSlideIn 0.3s ease-out;
+            `;
+            
+            // Add animation keyframes if not exists
+            if (!document.getElementById('pm-toast-style')) {
+                const style = document.createElement('style');
+                style.id = 'pm-toast-style';
+                style.textContent = `
+                    @keyframes toastSlideIn { from { opacity: 0; transform: translateX(-50%) translateY(-20px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+                    @keyframes toastSlideOut { from { opacity: 1; transform: translateX(-50%) translateY(0); } to { opacity: 0; transform: translateX(-50%) translateY(-20px); } }
+                `;
+                document.head.appendChild(style);
+            }
+            
+            document.body.appendChild(toast);
+            
+            // Auto remove after 3 seconds
+            setTimeout(() => {
+                toast.style.animation = 'toastSlideOut 0.3s ease-out forwards';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+        
+        // Hide card with animation (direction: 'left', 'right', or 'scale')
+        function hideCard(userId, direction = 'scale') {
             const card = document.querySelector(`.pm-swipe-card[data-user-id="${userId}"]`);
             if (card) {
-                card.style.transition = 'opacity 0.3s, transform 0.3s';
+                card.style.transition = 'opacity 0.4s ease-out, transform 0.4s ease-out';
                 card.style.opacity = '0';
-                card.style.transform = 'scale(0.8)';
-                setTimeout(() => card.remove(), 300);
+                
+                if (direction === 'right') {
+                    card.style.transform = 'translateX(150%) rotate(15deg)';
+                } else if (direction === 'left') {
+                    card.style.transform = 'translateX(-150%) rotate(-15deg)';
+                } else {
+                    card.style.transform = 'scale(0.8)';
+                }
+                
+                setTimeout(() => card.remove(), 400);
             }
         }
         
@@ -9678,10 +10748,37 @@ function pm_mobile_member_tabs() {
             }
         };
         
-        // Like user - call API and hide
-        window.pmLikeUser = async function(userId) {
+        // Unlike user - remove from liked list via API
+        window.pmUnlikeUser = async function(userId) {
             // Hide immediately for responsiveness
             hideCard(userId);
+            
+            try {
+                const response = await fetch('<?php echo rest_url('sk/v1/like'); ?>', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>'
+                    },
+                    body: JSON.stringify({ user_id: userId })
+                });
+                
+                if (!response.ok) {
+                    console.error('Unlike API error:', await response.text());
+                } else {
+                    const data = await response.json();
+                    console.log('Unlike response:', data);
+                }
+            } catch (error) {
+                console.error('Unlike error:', error);
+            }
+        };
+        
+        // Like user - call API and hide
+        window.pmLikeUser = async function(userId) {
+            // Hide immediately with swipe right animation
+            hideCard(userId, 'right');
             
             try {
                 const response = await fetch('<?php echo rest_url('sk/v1/like'); ?>', {
@@ -9708,6 +10805,144 @@ function pm_mobile_member_tabs() {
                 console.error('Like error:', error);
             }
         };
+        
+        // ===== Super Wiadomość (Super Message) Functions =====
+        let superMsgStatus = { is_premium: false, remaining_this_week: 0 };
+        
+        // Load Super Message status on page load
+        async function loadSuperMsgStatus() {
+            try {
+                const response = await fetch('<?php echo rest_url('sk/v1/super-message/status'); ?>', {
+                    method: 'GET',
+                    credentials: 'same-origin',
+                    headers: {
+                        'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>'
+                    }
+                });
+                if (response.ok) {
+                    superMsgStatus = await response.json();
+                    updateSuperMsgCounter();
+                }
+            } catch (e) {
+                console.error('Failed to load super message status:', e);
+            }
+        }
+        
+        // Update counter display
+        function updateSuperMsgCounter() {
+            const counter = document.getElementById('pm-super-msg-counter');
+            if (counter && superMsgStatus.is_premium) {
+                counter.textContent = superMsgStatus.remaining_this_week;
+                counter.closest('.pm-super-msg-header-counter').style.display = 'inline-flex';
+            }
+        }
+        
+        // Open Super Message modal
+        window.pmOpenSuperMessage = function(userId, userName) {
+            if (!superMsgStatus.is_premium) {
+                alert('Super Wiadomości są dostępne tylko dla użytkowników Premium! ⭐');
+                return;
+            }
+            
+            if (superMsgStatus.remaining_this_week <= 0) {
+                alert('Wykorzystałeś limit 3 Super Wiadomości na ten tydzień. Poczekaj do jutra lub kup więcej! 📅');
+                return;
+            }
+            
+            const modal = document.getElementById('pm-super-msg-modal');
+            const recipientEl = document.getElementById('pm-super-msg-recipient');
+            const textareaEl = document.getElementById('pm-super-msg-textarea');
+            const remainingEl = document.getElementById('pm-super-msg-remaining-count');
+            
+            if (modal) {
+                modal.dataset.userId = userId;
+                if (recipientEl) recipientEl.textContent = `Do: ${userName}`;
+                if (textareaEl) textareaEl.value = '';
+                if (remainingEl) remainingEl.textContent = superMsgStatus.remaining_this_week;
+                updateCharCounter();
+                modal.classList.add('active');
+            }
+        };
+        
+        // Close Super Message modal
+        window.pmCloseSuperMessage = function() {
+            const modal = document.getElementById('pm-super-msg-modal');
+            if (modal) {
+                modal.classList.remove('active');
+            }
+        };
+        
+        // Update character counter - must be global for oninput attribute
+        window.updateCharCounter = function() {
+            const textarea = document.getElementById('pm-super-msg-textarea');
+            const counter = document.getElementById('pm-super-msg-char-counter');
+            const sendBtn = document.getElementById('pm-super-msg-send-btn');
+            if (textarea && counter) {
+                const len = textarea.value.length;
+                counter.textContent = `${len}/500`;
+                counter.style.color = len > 500 ? '#e74c3c' : (len < 10 ? '#888' : '#2ecc71');
+                if (sendBtn) {
+                    sendBtn.disabled = len < 10 || len > 500;
+                }
+            }
+        };
+        
+        // Send Super Message
+        window.pmSendSuperMessage = async function() {
+            const modal = document.getElementById('pm-super-msg-modal');
+            const textarea = document.getElementById('pm-super-msg-textarea');
+            const sendBtn = document.getElementById('pm-super-msg-send-btn');
+            
+            if (!modal || !textarea) return;
+            
+            const userId = modal.dataset.userId;
+            const message = textarea.value.trim();
+            
+            if (message.length < 10 || message.length > 500) {
+                alert('Wiadomość musi mieć od 10 do 500 znaków.');
+                return;
+            }
+            
+            // Disable button during send
+            if (sendBtn) {
+                sendBtn.disabled = true;
+                sendBtn.textContent = 'Wysyłanie...';
+            }
+            
+            try {
+                const response = await fetch('<?php echo rest_url('sk/v1/super-message/send'); ?>', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-WP-Nonce': '<?php echo wp_create_nonce('wp_rest'); ?>'
+                    },
+                    body: JSON.stringify({ to_user_id: parseInt(userId), message: message })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    superMsgStatus.remaining_this_week = data.remaining_this_week;
+                    updateSuperMsgCounter();
+                    pmCloseSuperMessage();
+                    showToast('✉️ Super Wiadomość wysłana! Poczekaj na odpowiedź.', true);
+                } else {
+                    showToast('❌ ' + (data.message || 'Nie udało się wysłać wiadomości.'), false);
+                }
+            } catch (e) {
+                console.error('Super message send error:', e);
+                showToast('❌ Błąd połączenia. Spróbuj ponownie.', false);
+            } finally {
+                if (sendBtn) {
+                    sendBtn.disabled = false;
+                    sendBtn.textContent = '✉️ Wyślij Super Wiadomość';
+                }
+            }
+        };
+        
+        // Initialize Super Message status
+        loadSuperMsgStatus();
         
         // Load saved filters from localStorage on page init
         function loadFilters() {
@@ -9770,6 +11005,31 @@ function pm_mobile_member_tabs() {
         loadFilters();
     });
     </script>
+    
+    <!-- Super Wiadomość Modal -->
+    <div id="pm-super-msg-modal" class="pm-super-msg-modal" onclick="if(event.target === this) pmCloseSuperMessage();">
+        <div class="pm-super-msg-content">
+            <div class="pm-super-msg-header">
+                <div class="pm-super-msg-title">✉️ Super Wiadomość</div>
+                <button class="pm-super-msg-close" onclick="pmCloseSuperMessage();">&times;</button>
+            </div>
+            <div id="pm-super-msg-recipient" class="pm-super-msg-recipient"></div>
+            <textarea 
+                id="pm-super-msg-textarea" 
+                class="pm-super-msg-textarea" 
+                placeholder="Napisz przemyślaną wiadomość, która zrobi wrażenie... (min. 10 znaków)"
+                maxlength="500"
+                oninput="window.updateCharCounter();"
+            ></textarea>
+            <div id="pm-super-msg-char-counter" class="pm-super-msg-counter">0/500</div>
+            <div class="pm-super-msg-remaining">
+                Pozostało Super Wiadomości w tym tygodniu: <span id="pm-super-msg-remaining-count">3</span>
+            </div>
+            <button id="pm-super-msg-send-btn" class="pm-super-msg-send" onclick="pmSendSuperMessage();" disabled>
+                ✉️ Wyślij Super Wiadomość
+            </button>
+        </div>
+    </div>
     
     <?php
 }
@@ -10599,6 +11859,28 @@ function hook_bp_avatar_quality_boost_opt($html, $params = [], $item_id = 0, $av
         }
     }
 
+    // --- PREMIUM BADGE INJECTION (DESKTOP FIX) ---
+    // Force debug or check capability
+    $is_premium_debug = true; 
+    // $is_premium = sk_is_premium_user($item_id);
+
+    if ( $is_premium_debug ) {
+        $badge = '<span class="sk-bp-premium-badge" style="
+            position: absolute; 
+            top: -3px; 
+            right: -3px; 
+            font-size: 14px; 
+            line-height: 1; 
+            z-index: 999;
+            filter: drop-shadow(0 0 2px rgba(0,0,0,0.5));
+            pointer-events: none;
+        ">⭐</span>';
+        
+        // Wrap in relative container if not already handled by parent
+        // We use a span with inline-flex to minimize layout disruption
+        return '<span class="sk-bp-avatar-wrapper" style="position: relative; display: inline-block; line-height: 0;">' . $html . $badge . '</span>';
+    }
+
     return $html;
 }
 add_filter('bp_core_fetch_avatar', 'hook_bp_avatar_quality_boost_opt', 20, 9);
@@ -10632,5 +11914,70 @@ add_filter('bp_core_fetch_avatar_url', 'hook_bp_avatar_urls_bulletproof', 20, 3)
 
 
 
+// TYMCZASOWE - usuń po testach!
+add_action('admin_init', function() {
+    if (isset($_GET['reset_super_msg']) && $_GET['reset_super_msg'] == '335') {
+        delete_user_meta(335, 'sk_super_messages_sent');
+        delete_user_meta(335, 'sk_super_messages_received');
+        delete_user_meta(335, 'sk_super_messages_weekly_count');
+        delete_user_meta(335, 'sk_super_messages_week'); // <- to jest prawidłowy klucz licznika!
+        delete_user_meta(335, 'sk_super_message_history');
+        delete_user_meta(335, 'sk_super_message_cooldowns');
+        wp_die('Reset wykonany dla użytkownika 335! Możesz zamknąć tę stronę.');
+    }
+});
+
+// TYMCZASOWE - usuń po testach!
+add_action('admin_init', function() {
+    if (isset($_GET['reset_super_msg']) && $_GET['reset_super_msg'] == '429') {
+        delete_user_meta(429, 'sk_super_messages_sent');
+        delete_user_meta(429, 'sk_super_messages_received');
+        delete_user_meta(429, 'sk_super_messages_weekly_count');
+        delete_user_meta(429, 'sk_super_messages_week'); // <- to jest prawidłowy klucz licznika!
+        delete_user_meta(429, 'sk_super_message_history');
+        delete_user_meta(429, 'sk_super_message_cooldowns');
+        wp_die('Reset wykonany dla użytkownika 429!');
+    }
+});
 
 
+
+// ========================================
+// PM Premium: Global Avatar Badge Injection
+// ========================================
+function sk_inject_premium_badge_global($avatar, $id_or_email, $size, $default, $alt) {
+    // 1. Get User ID
+    $user_id = 0;
+    if (is_numeric($id_or_email)) {
+        $user_id = (int) $id_or_email;
+    } elseif (is_string($id_or_email) && ($user = get_user_by('email', $id_or_email))) {
+        $user_id = $user->ID;
+    } elseif (is_object($id_or_email) && !empty($id_or_email->user_id)) {
+        $user_id = (int) $id_or_email->user_id;
+    }
+
+    if (!$user_id) return $avatar;
+
+    // 2. Check Premium
+    // $is_premium = sk_is_premium_user($user_id);
+    $is_premium = true; // FORCE DEBUG
+
+    if ($is_premium) {
+        // 3. Inject Badge
+        $badge = '<span class="sk-global-premium-badge" style="
+            position: absolute; 
+            top: -5px; 
+            right: -5px; 
+            font-size: 14px; 
+            line-height: 1; 
+            z-index: 999;
+            filter: drop-shadow(0 0 2px rgba(0,0,0,0.5));
+            pointer-events: none;
+        ">⭐</span>';
+
+        return '<span class="sk-avatar-wrapper" style="position: relative; display: inline-block;">' . $avatar . $badge . '</span>';
+    }
+
+    return $avatar;
+}
+add_filter('get_avatar', 'sk_inject_premium_badge_global', 100, 5);
