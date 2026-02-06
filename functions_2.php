@@ -715,6 +715,18 @@ function grid_uzytkownikow_shortcode()
             padding: 24px 16px;
             max-width: 1400px;
             margin: 0 auto;
+            overflow: visible !important;
+        }
+        
+        /* Fix: Prevent parent containers from clipping the grid on desktop */
+        .entry-content,
+        .site-content,
+        #content,
+        main,
+        article,
+        #buddypress,
+        .buddypress-wrap {
+            overflow: visible !important;
         }
 
         /* Card - Turkusowa kolorystyka */
@@ -1766,10 +1778,18 @@ function load_users_grid_with_preferences_ajax()
         $last_active_formatted = $last_active_time ? bp_core_time_since($last_active_time) : 'Nigdy';
         $last_active_timestamp = $last_active_time ? strtotime($last_active_time) : 0;
 
-        // --- POPRAWKA: Pobieramy datę urodzenia i na jej podstawie obliczamy obie wartości ---
-        $birth_date = bp_get_profile_field_data(['field' => 107, 'user_id' => $user_id]);
+        // --- POPRAWKA: Pobieramy datę urodzenia (RAW) po ID pola (107) - pewniejsze niż nazwa ---
+        $birth_date = xprofile_get_field_data(107, $user_id); 
+        
+        // Fallback for array return
+        if (is_array($birth_date)) $birth_date = reset($birth_date);
+        if (is_object($birth_date)) $birth_date = ''; 
+        
         $numerology_number = sk_calculate_life_path_number($birth_date);
-        $zodiac_sign = get_zodiac_sign($birth_date); // Używamy tej samej daty urodzenia
+        $zodiac_sign = get_zodiac_sign($birth_date); 
+        
+        // DEBUG LOGGING - ID 107
+        // error_log("User ID: $user_id | Birth Date (ID 107): " . print_r($birth_date, true) . " | Zodiac: $zodiac_sign");
 
         $results[] = [
             'id' => $user_id,
@@ -3750,8 +3770,10 @@ function ajax_filter_users_grid_callback()
             echo '      <div class="user-card-avatar">';
             echo bp_member_avatar('type=full&width=400&height=400');
             echo $activity_indicator_html;
-            // DEBUG: Always show badge to test CSS (remove after testing)
-            echo '<span class="avatar-premium-badge">⭐</span>';
+            // Show premium badge only for premium users
+            if ($is_premium_user) {
+                echo '<span class="avatar-premium-badge">⭐</span>';
+            }
             echo '      </div>';
             echo '      <div class="user-card-info">';
             echo '          <p class="user-location">' . (xprofile_get_field_data('Lokalizacja', $user_id) ?: 'Brak lokalizacji') . '</p>';
@@ -6107,8 +6129,16 @@ function my_safe_onboarding_form()
             $existing_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
             if (!is_array($existing_ids)) $existing_ids = [];
             
+            // If photo_1 (avatar) was uploaded, remove OLD avatar from gallery to avoid duplication
+            $old_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+            if ($old_avatar_id && in_array($old_avatar_id, $existing_ids)) {
+                $existing_ids = array_filter($existing_ids, function($id) use ($old_avatar_id) {
+                    return (int)$id !== (int)$old_avatar_id;
+                });
+            }
+
             $all_ids = array_unique(array_merge($existing_ids, $profile_photos_ids));
-            update_user_meta($user_id, 'user_profile_photos_ids', $all_ids);
+            update_user_meta($user_id, 'user_profile_photos_ids', array_values($all_ids));
         }
 
         // 5. Finalizacja i przekierowanie
@@ -7442,6 +7472,13 @@ function pm_mobile_bottom_nav() {
             <span class="pm-nav-label">Lubią Mnie</span>
         </a>
         
+        <a href="<?php echo home_url('/tablica'); ?>" class="pm-nav-item <?php echo (strpos($current_url, '/tablica') !== false) ? 'active' : ''; ?>">
+            <svg class="pm-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/>
+            </svg>
+            <span class="pm-nav-label">Tablica</span>
+        </a>
+        
         <a href="<?php echo $user_domain . $messages_slug . '/'; ?>" class="pm-nav-item <?php echo $is_messages ? 'active' : ''; ?>">
             <span class="pm-nav-icon-wrapper">
                 <svg class="pm-nav-icon" viewBox="0 0 24 24" fill="currentColor">
@@ -7636,10 +7673,128 @@ function pm_add_hires_avatar_to_rest($response, $user, $request) {
 /**
  * Register REST API endpoint for getting members with filters
  */
+/**
+ * Batch fetch xprofile data for a list of user IDs
+ */
+function sk_get_batch_xprofile_data($user_ids) {
+    if (empty($user_ids)) return [];
+    
+    global $wpdb;
+    $bp = buddypress();
+    
+    $ids_placeholder = implode(',', array_map('intval', $user_ids));
+    
+    // Define the fields we care about
+    $fields_to_fetch = [
+        'Data urodzenia', 'O mnie', 'Podejście do wiary', 'Poglądy Polityczne', 
+        'Styl Pracy', 'Styl jedzenia', 'Znak zodiaku'
+    ];
+    $fields_placeholder = implode("','", array_map('esc_sql', $fields_to_fetch));
+    
+    $query = "
+        SELECT d.user_id, f.name, d.value, f.id as field_id 
+        FROM {$bp->profile->table_name_data} d
+        JOIN {$bp->profile->table_name_fields} f ON d.field_id = f.id
+        WHERE d.user_id IN ($ids_placeholder)
+        AND (f.name IN ('$fields_placeholder') OR f.id = 107)
+    ";
+    
+    $raw_results = $wpdb->get_results($query);
+    $formatted = [];
+    
+    foreach ($raw_results as $row) {
+        $key = $row->name;
+        // FORCE 'Data urodzenia' key for ID 107 to avoid encoding issues
+        if ($row->field_id == 107) {
+            $key = 'Data urodzenia';
+        }
+        $formatted[$row->user_id][$key] = maybe_unserialize($row->value);
+        if ($row->field_id == 107) {
+     
+        }
+    }
+    
+    return $formatted;
+}
+
+/**
+ * Batch fetch last activity for a list of user IDs
+ */
+function sk_get_batch_last_activity($user_ids) {
+    if (empty($user_ids)) return [];
+    
+    global $wpdb;
+    $ids_placeholder = implode(',', array_map('intval', $user_ids));
+    
+    // BP stores last activity in user_meta with key 'last_activity'
+    $query = "
+        SELECT user_id, meta_value 
+        FROM {$wpdb->usermeta} 
+        WHERE user_id IN ($ids_placeholder) 
+        AND meta_key = 'last_activity'
+    ";
+    
+    $raw_results = $wpdb->get_results($query);
+    $formatted = [];
+    
+    foreach ($raw_results as $row) {
+        $formatted[$row->user_id] = $row->meta_value;
+    }
+    
+    return $formatted;
+}
+
+/**
+ * Batch fetch high-res avatars for a list of user IDs
+ */
+function sk_get_batch_hires_avatars($user_ids) {
+    if (empty($user_ids)) return [];
+    
+    global $wpdb;
+    $ids_placeholder = implode(',', array_map('intval', $user_ids));
+    
+    $query = "
+        SELECT user_id, meta_value 
+        FROM {$wpdb->usermeta} 
+        WHERE user_id IN ($ids_placeholder) 
+        AND meta_key = 'user_avatar_id'
+    ";
+    
+    $raw_results = $wpdb->get_results($query);
+    $formatted = [];
+    
+    foreach ($raw_results as $row) {
+        $attach_id = intval($row->meta_value);
+        if ($attach_id) {
+            $large_url = wp_get_attachment_image_url($attach_id, 'large');
+            $full_url = wp_get_attachment_image_url($attach_id, 'full');
+            
+            // Only add to array if at least one URL was successfully retrieved
+            if ($large_url || $full_url) {
+                $formatted[$row->user_id] = [
+                    'large' => $large_url,
+                    'full' => $full_url,
+                ];
+            }
+        }
+    }
+    
+    return $formatted;
+}
+
 add_action('rest_api_init', function () {
     register_rest_route('sk/v1', '/members', [
         'methods' => 'GET',
         'callback' => 'sk_get_members_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+
+    // Single member endpoint with full details - supports 'me' or ID
+    register_rest_route('sk/v1', '/member/(?P<id>[a-zA-Z0-9]+)', [
+        'methods' => 'GET',
+        'callback' => 'sk_get_single_member_endpoint',
         'permission_callback' => function() {
             return is_user_logged_in();
         }
@@ -7681,32 +7836,35 @@ function sk_get_matches_endpoint($request) {
     // Find mutual likes (matches)
     $match_ids = array_intersect($my_likes, $liked_me);
     
+    if (empty($match_ids)) {
+        return rest_ensure_response([]);
+    }
+
+    // BATCH FETCH ALL DATA
+    $batch_xprofile = sk_get_batch_xprofile_data($match_ids);
+    $batch_activity = sk_get_batch_last_activity($match_ids);
+    $batch_avatars = sk_get_batch_hires_avatars($match_ids);
+
     $results = [];
-    
     foreach ($match_ids as $user_id) {
         $user_data = get_userdata($user_id);
-        if (!$user_data) {
-            continue;
+        if (!$user_data) continue;
+        
+        $x_data = isset($batch_xprofile[$user_id]) ? $batch_xprofile[$user_id] : [];
+        
+        // Age calculation
+        $age = '';
+        $birth_date = isset($x_data['Data urodzenia']) ? $x_data['Data urodzenia'] : '';
+        if ($birth_date) {
+            $age = date_diff(date_create($birth_date), date_create('today'))->y;
         }
         
-        // Get high-res avatar from media library
-        $attach_id = get_user_meta($user_id, 'user_avatar_id', true);
-        $avatar_url = '';
-        if ($attach_id) {
-            $avatar_url = wp_get_attachment_image_url($attach_id, 'large') ?: 
-                         wp_get_attachment_image_url($attach_id, 'full');
-        }
-        // Fallback to BuddyPress avatar
-        if (!$avatar_url && function_exists('bp_core_fetch_avatar')) {
-            $avatar_url = bp_core_fetch_avatar(array(
-                'item_id' => $user_id,
-                'type' => 'full',
-                'html' => false
-            ));
-        }
-        
-        // Get last active time
-        $last_active = bp_get_user_last_activity($user_id);
+        $bio = isset($x_data['O mnie']) ? $x_data['O mnie'] : '';
+        $faith_val = isset($x_data['Podejście do wiary']) ? $x_data['Podejście do wiary'] : (isset($x_data['Wiara']) ? $x_data['Wiara'] : null);
+        $politics_val = isset($x_data['Poglądy Polityczne']) ? $x_data['Poglądy Polityczne'] : null;
+        $work_val = isset($x_data['Styl Pracy']) ? $x_data['Styl Pracy'] : (isset($x_data['Styl pracy']) ? $x_data['Styl pracy'] : null);
+        $diet_val = isset($x_data['Styl jedzenia']) ? $x_data['Styl jedzenia'] : (isset($x_data['Dieta']) ? $x_data['Dieta'] : null);
+        $zodiac_val = isset($x_data['Znak zodiaku']) ? $x_data['Znak zodiaku'] : (isset($x_data['Znak Zodiaku']) ? $x_data['Znak Zodiaku'] : null);
         
         // Check for existing thread with this user
         $thread_id = 0;
@@ -7714,16 +7872,22 @@ function sk_get_matches_endpoint($request) {
             global $wpdb;
             $bp = buddypress();
             if (isset($bp->messages->table_name_recipients)) {
-                // Find existing thread between current user and this match
                 $thread_id = $wpdb->get_var($wpdb->prepare(
                     "SELECT r1.thread_id FROM {$bp->messages->table_name_recipients} r1
                      INNER JOIN {$bp->messages->table_name_recipients} r2 ON r1.thread_id = r2.thread_id
                      WHERE r1.user_id = %d AND r2.user_id = %d AND r1.user_id != r2.user_id
-                     ORDER BY r1.thread_id DESC
-                     LIMIT 1",
+                     ORDER BY r1.thread_id DESC LIMIT 1",
                     $current_user_id, $user_id
                 ));
             }
+        }
+        
+        $avatar_url = '';
+        if (isset($batch_avatars[$user_id])) {
+            $avatar_url = $batch_avatars[$user_id]['large'] ?: $batch_avatars[$user_id]['full'] ?: '';
+        }
+        if (!$avatar_url) {
+            $avatar_url = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]);
         }
         
         $results[] = [
@@ -7734,11 +7898,15 @@ function sk_get_matches_endpoint($request) {
             'avatar_urls' => [
                 'full' => $avatar_url
             ],
-            'hires_avatar' => [
-                'large' => $attach_id ? wp_get_attachment_image_url($attach_id, 'large') : '',
-                'full' => $attach_id ? wp_get_attachment_image_url($attach_id, 'full') : '',
-            ],
-            'last_activity' => $last_active,
+            'hires_avatar' => isset($batch_avatars[$user_id]) ? $batch_avatars[$user_id] : [],
+            'age' => $age,
+            'bio' => $bio ? esc_html(wp_trim_words($bio, 15, '...')) : '',
+            'faith' => $faith_val,
+            'politics' => $politics_val,
+            'work' => $work_val,
+            'diet' => $diet_val,
+            'zodiac_sign' => $zodiac_val,
+            'last_activity' => isset($batch_activity[$user_id]) ? 'Aktywny/a ' . bp_core_time_since($batch_activity[$user_id]) : 'Aktywność nieznana',
             'thread_id' => intval($thread_id),
         ];
     }
@@ -7772,32 +7940,43 @@ function sk_get_liked_users_endpoint($request) {
     // Get users I liked
     $my_likes = get_user_meta($current_user_id, 'sk_user_likes', true) ?: [];
     
+    if (empty($my_likes)) {
+        return rest_ensure_response([]);
+    }
+
+    // BATCH FETCH ALL DATA
+    $batch_xprofile = sk_get_batch_xprofile_data($my_likes);
+    $batch_activity = sk_get_batch_last_activity($my_likes);
+    $batch_avatars = sk_get_batch_hires_avatars($my_likes);
+
     $results = [];
-    
     foreach ($my_likes as $user_id) {
         $user_data = get_userdata($user_id);
-        if (!$user_data) {
-            continue;
+        if (!$user_data) continue;
+        
+        $x_data = isset($batch_xprofile[$user_id]) ? $batch_xprofile[$user_id] : [];
+        
+        // Age calculation
+        $age = '';
+        $birth_date = isset($x_data['Data urodzenia']) ? $x_data['Data urodzenia'] : '';
+        if ($birth_date) {
+            $age = date_diff(date_create($birth_date), date_create('today'))->y;
         }
         
-        // Get high-res avatar from media library
-        $attach_id = get_user_meta($user_id, 'user_avatar_id', true);
+        $bio = isset($x_data['O mnie']) ? $x_data['O mnie'] : '';
+        $faith_val = isset($x_data['Podejście do wiary']) ? $x_data['Podejście do wiary'] : (isset($x_data['Wiara']) ? $x_data['Wiara'] : null);
+        $politics_val = isset($x_data['Poglądy Polityczne']) ? $x_data['Poglądy Polityczne'] : null;
+        $work_val = isset($x_data['Styl Pracy']) ? $x_data['Styl Pracy'] : (isset($x_data['Styl pracy']) ? $x_data['Styl pracy'] : null);
+        $diet_val = isset($x_data['Styl jedzenia']) ? $x_data['Styl jedzenia'] : (isset($x_data['Dieta']) ? $x_data['Dieta'] : null);
+        $zodiac_val = get_zodiac_sign($birth_date);
+        
         $avatar_url = '';
-        if ($attach_id) {
-            $avatar_url = wp_get_attachment_image_url($attach_id, 'large') ?: 
-                         wp_get_attachment_image_url($attach_id, 'full');
+        if (isset($batch_avatars[$user_id])) {
+            $avatar_url = $batch_avatars[$user_id]['large'] ?: $batch_avatars[$user_id]['full'] ?: '';
         }
-        // Fallback to BuddyPress avatar
         if (!$avatar_url) {
-            $avatar_url = bp_core_fetch_avatar(array(
-                'item_id' => $user_id,
-                'type' => 'full',
-                'html' => false
-            ));
+            $avatar_url = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]);
         }
-        
-        // Get last active time
-        $last_active = bp_get_user_last_activity($user_id);
         
         $results[] = [
             'id' => $user_id,
@@ -7806,11 +7985,15 @@ function sk_get_liked_users_endpoint($request) {
             'avatar_urls' => [
                 'full' => $avatar_url
             ],
-            'hires_avatar' => [
-                'large' => $attach_id ? wp_get_attachment_image_url($attach_id, 'large') : '',
-                'full' => $attach_id ? wp_get_attachment_image_url($attach_id, 'full') : '',
-            ],
-            'last_activity' => $last_active,
+            'hires_avatar' => isset($batch_avatars[$user_id]) ? $batch_avatars[$user_id] : [],
+            'age' => $age,
+            'bio' => $bio ? esc_html(wp_trim_words($bio, 15, '...')) : '',
+            'faith' => $faith_val,
+            'politics' => $politics_val,
+            'work' => $work_val,
+            'diet' => $diet_val,
+            'zodiac_sign' => $zodiac_val,
+            'last_activity' => isset($batch_activity[$user_id]) ? 'Aktywny/a ' . bp_core_time_since($batch_activity[$user_id]) : 'Aktywność nieznana',
         ];
     }
     
@@ -7823,78 +8006,11 @@ function sk_get_liked_users_endpoint($request) {
 function sk_get_members_endpoint($request) {
     $current_user_id = get_current_user_id();
     
-    // Check for include parameter (filter to specific user IDs only)
-    $include = $request->get_param('include');
-    if ($include) {
-        // Parse comma-separated IDs
-        $include_ids = array_map('intval', explode(',', $include));
-        $include_ids = array_filter($include_ids); // Remove zeros/empty
-        
-        if (empty($include_ids)) {
-            return rest_ensure_response([]);
-        }
-        
-        // Get only the specified users
-        $users_data = [];
-        foreach ($include_ids as $user_id) {
-            if ($user_id == $current_user_id || $user_id == 1) continue; // Skip self and admin
-            
-            $user = get_userdata($user_id);
-            if (!$user) continue;
-            
-            // Build user data
-            $birth_date = bp_get_profile_field_data(['field' => 'Data urodzenia', 'user_id' => $user_id]);
-            $age = '';
-            if ($birth_date) {
-                try {
-                    $birth = new DateTime($birth_date);
-                    $now = new DateTime();
-                    $age = $now->diff($birth)->y;
-                } catch (Exception $e) {}
-            }
-            
-            $faith = bp_get_profile_field_data(['field' => 'Wiara', 'user_id' => $user_id]);
-            $politics = bp_get_profile_field_data(['field' => 'Poglądy Polityczne', 'user_id' => $user_id]);
-            $work = bp_get_profile_field_data(['field' => 'Styl pracy', 'user_id' => $user_id]);
-            $diet = bp_get_profile_field_data(['field' => 'Dieta', 'user_id' => $user_id]);
-            $bio = bp_get_profile_field_data(['field' => 343, 'user_id' => $user_id]);
-            $last_activity = bp_get_user_last_activity($user_id);
-            $zodiac = bp_get_profile_field_data(['field' => 'Znak Zodiaku', 'user_id' => $user_id]);
-            
-            $custom_avatar_id = get_user_meta($user_id, 'sk_profile_photo_id', true);
-            $hires_avatar = [];
-            if ($custom_avatar_id) {
-                $hires_avatar = [
-                    'full' => wp_get_attachment_image_url($custom_avatar_id, 'full'),
-                    'large' => wp_get_attachment_image_url($custom_avatar_id, 'large'),
-                ];
-            }
-            
-            $users_data[] = [
-                'id' => $user_id,
-                'name' => $user->display_name,
-                'mention_name' => $user->user_nicename,
-                'link' => bp_members_get_user_url($user_id),
-                'avatar' => bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]),
-                'hires_avatar' => $hires_avatar,
-                'age' => $age,
-                'bio' => $bio ? esc_html(wp_trim_words($bio, 15, '...')) : '',
-                'faith' => $faith ?: null,
-                'politics' => $politics ?: null,
-                'work' => $work ?: null,
-                'diet' => $diet ?: null,
-                'zodiac_sign' => $zodiac ?: null,
-                'last_activity' => $last_activity ? bp_core_time_since($last_activity) : null,
-            ];
-        }
-        
-        return rest_ensure_response($users_data);
-    }
-    
     // Pagination params
     $page = $request->get_param('page') ?: 1;
     $per_page = $request->get_param('per_page') ?: 20;
     $search = $request->get_param('search');
+    $include = $request->get_param('include');
     
     // Filter params
     $min_age = $request->get_param('min_age');
@@ -7903,97 +8019,33 @@ function sk_get_members_endpoint($request) {
     $politics = $request->get_param('politics');
     $work = $request->get_param('work');
     $diet = $request->get_param('diet');
-    $has_bio = $request->get_param('has_bio');
 
     $args = [
         'page' => $page,
         'per_page' => $per_page,
         'search_terms' => $search,
-        'type' => 'alphabetical', // Show ALL members, not just recently active
-        'populate_extras' => false, // We'll fetch custom data
+        'type' => 'alphabetical',
+        'populate_extras' => false,
     ];
 
-    // Exclude current user and blocked users (if logic exists)
-    $exclude_ids = [$current_user_id, 1]; // Always exclude admin/self
+    if ($include) {
+        $args['include'] = array_filter(array_map('intval', explode(',', $include)));
+    }
+
+    $exclude_ids = [$current_user_id, 1];
     $blocked_users = get_user_meta($current_user_id, 'sk_blocked_users', true);
     if (is_array($blocked_users)) {
         $exclude_ids = array_merge($exclude_ids, $blocked_users);
     }
     $args['exclude'] = $exclude_ids;
 
-
-    // Build xProfile Query
     $xprofile_query = ['relation' => 'AND'];
-    
-    // Age Filtering (assuming Data urodzenia is field ID 1 or name 'Data urodzenia')
-    if ($min_age || $max_age) {
-        $min = $min_age ?: 18;
-        $max = $max_age ?: 100;
-        
-        // Calculate date range for age
-        // Age X means born between Today-(X+1)years + 1 day AND Today-X years
-        // Actually simpler: Born BEFORE (today - min years) AND Born AFTER (today - max years - 1 year)
-        
-        // Simplification for BP xprofile date field which is usually Y-m-d
-        // Using 'range' type requires specific setup.
-        // Let's rely on standard logic used in other plugin parts if available, 
-        // OR construct query manually.
-        // Since we don't have standard range support easily for date fields without extra code,
-        // let's assume 'Data urodzenia' is stored as Y-m-d.
-        
-        // Using the field ID we saw earlier? No ID for age seen.
-        // Let's try name 'Data urodzenia'.
-        
-        // $xprofile_query[] = [
-        //    'field' => 'Data urodzenia',
-        //    'value' => ... // Range queries on dates are hard in standard BP_User_Query without custom SQL filter
-        // ];
-        
-        /* 
-           NOTE: Standard BP doesn't support range query on dates easily.
-           We might need to rely on the existing filter logic or handle age via manual loop (bad for pagination).
-           However, earlier we saw 'ajax_filter_users_grid_callback' which didn't have age.
-           But 'getMembers' in MembersScreen.js passes 'min_age', 'max_age' to BP API which supports it via plugin maybe?
-           If standard BP API supports it, we might want to leverage that.
-           But we are writing a custom SQL query here via BP_User_Query.
-           
-           Let's temporarily skip COMPLEX age custom query building and assume 
-           'sk_filter_members_by_age' (which we saw in task list earlier? no) 
-           or similar plugin hooks handle 'xprofile_query' if we pass special format.
-           
-           Actually, the best way is to fetch all matching other criteria and filter by age in loop IF the dataset is small? 
-           NO, pagination breaks.
-           
-           Let's use the standard BP REST API approach for age if possible...
-           But we are in a custom endpoint.
-           
-           Solution: Use the helper function if it exists, or just omit age filter for now in Query 
-           and handle it via hook?
-           Let's look at `ajax_filter_users_grid_callback` again. It didn't have age.
-           
-           Let's proceed with IDs we found for other fields:
-           Faith: 133
-           Politics: 215
-           Work: 108
-           Diet: 334
-        */
-    }
-
-    $field_id_map = [
-        'faith' => 133,
-        'politics' => 215,
-        'work' => 108,
-        'diet' => 334,
-    ];
+    $field_id_map = ['faith' => 133, 'politics' => 215, 'work' => 108, 'diet' => 334];
 
     foreach ($field_id_map as $param => $id) {
-        $val = $$param; // get variable by name
+        $val = $request->get_param($param);
         if ($val) {
-             $xprofile_query[] = [
-                'field' => $id,
-                'value' => $val,
-                'compare' => '=', // Exact match
-            ];
+            $xprofile_query[] = ['field' => $id, 'value' => $val, 'compare' => '='];
         }
     }
 
@@ -8001,85 +8053,79 @@ function sk_get_members_endpoint($request) {
         $args['xprofile_query'] = $xprofile_query;
     }
 
-    // Run Query
     if (bp_has_members($args)) {
+        global $members_template;
+        $user_ids = [];
+        foreach ($members_template->members as $user) {
+            $user_ids[] = $user->ID;
+        }
+
+        // BATCH FETCH EVERYTHING
+        $batch_xprofile = sk_get_batch_xprofile_data($user_ids);
+        $batch_activity = sk_get_batch_last_activity($user_ids);
+        $batch_avatars = sk_get_batch_hires_avatars($user_ids);
+
         $results = [];
-        while (bp_members()) {
-            bp_the_member();
-            $user_id = bp_get_member_user_id();
-            $user_data = get_userdata($user_id);
+        foreach ($members_template->members as $user) {
+            $u_id = $user->ID;
+            $u_data = get_userdata($u_id);
+            if (!$u_data) continue;
+
+            $x_data = isset($batch_xprofile[$u_id]) ? $batch_xprofile[$u_id] : [];
             
-            // Helpers
-            $avatar_url = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]);
-            $attach_id = get_user_meta($user_id, 'user_avatar_id', true);
-            $hires_avatar_large = $attach_id ? wp_get_attachment_image_url($attach_id, 'large') : '';
-            $hires_avatar_full = $attach_id ? wp_get_attachment_image_url($attach_id, 'full') : '';
-            
-            // XProfile Data
-            $age = bp_get_member_profile_data('field=Data urodzenia');
-            if ($age) {
-                 // Calculate age from date
-                 $age = date_diff(date_create($age), date_create('today'))->y;
-            }
-            
-            // Filter by age explicitly here if query didn't handle it
-            // Only filter if age is actually known
-            if ($age) {
+            // Age calculation
+            $age = '';
+            $birth_date = isset($x_data['Data urodzenia']) ? $x_data['Data urodzenia'] : '';
+            if ($birth_date) {
+                $age = date_diff(date_create($birth_date), date_create('today'))->y;
                 if ($min_age && $age < $min_age) continue;
                 if ($max_age && $age > $max_age) continue;
             }
 
-            $zodiac = bp_get_member_profile_data('field=Znak zodiaku');
-            $faith_val = bp_get_member_profile_data('field=Podejście do wiary'); // using name just to be safe/readable
-            $politics_val = bp_get_member_profile_data('field=Poglądy Polityczne');
-            $work_val = bp_get_member_profile_data('field=Styl Pracy');
-            $diet_val = bp_get_member_profile_data('field=Styl jedzenia');
-            $bio = bp_get_member_profile_data('field=O mnie');
-            
-            // Calculate numerology and zodiac from birth date
-            $birth_date = bp_get_member_profile_data('field=Data urodzenia');
-            $numerology = $birth_date ? sk_calculate_life_path_number($birth_date) : null;
-            $zodiac_sign = $birth_date ? get_zodiac_sign($birth_date) : null;
+            $bio = isset($x_data['O mnie']) ? $x_data['O mnie'] : '';
+            $faith_val = isset($x_data['Podejście do wiary']) ? $x_data['Podejście do wiary'] : (isset($x_data['Wiara']) ? $x_data['Wiara'] : null);
+            $politics_val = isset($x_data['Poglądy Polityczne']) ? $x_data['Poglądy Polityczne'] : null;
+            $work_val = isset($x_data['Styl Pracy']) ? $x_data['Styl Pracy'] : (isset($x_data['Styl pracy']) ? $x_data['Styl pracy'] : null);
+            $diet_val = isset($x_data['Styl jedzenia']) ? $x_data['Styl jedzenia'] : (isset($x_data['Dieta']) ? $x_data['Dieta'] : null);
+            $zodiac_val = get_zodiac_sign($birth_date);
+            // DEBUG LOGGING
+            $zodiac_val = get_zodiac_sign($birth_date);
+            // DEBUG LOGGING
+             // error_log("APP SEARCH - User: $u_id, BirthDate: " . print_r($birth_date, true) . ", Zodiac: $zodiac_val");
 
-            if ($has_bio === 'true' && empty($bio)) continue;
-
-
-            // Get last activity properly
-            $last_active_raw = bp_get_user_last_activity($user_id);
-            $last_activity_formatted = '';
-            if ($last_active_raw) {
-                $last_activity_formatted = 'Aktywny/a ' . bp_core_time_since($last_active_raw);
-            } else {
-                // Try to get from user registration date as fallback
-                $registered = $user_data->user_registered;
-                if ($registered) {
-                    $last_activity_formatted = 'Zarejestrowany/a ' . bp_core_time_since($registered);
-                } else {
-                    $last_activity_formatted = 'Aktywność nieznana';
-                }
+            $avatar_url = '';
+            if (isset($batch_avatars[$u_id])) {
+                $avatar_url = $batch_avatars[$u_id]['large'] ?: $batch_avatars[$u_id]['full'] ?: '';
+            }
+            if (!$avatar_url) {
+                $avatar_url = bp_core_fetch_avatar(['item_id' => $u_id, 'type' => 'full', 'html' => false]);
             }
 
             $results[] = [
-                'id' => $user_id,
-                'name' => $user_data->display_name,
-                'mention_name' => $user_data->user_nicename,
-                'avatar_urls' => ['full' => $avatar_url],
-                'hires_avatar' => ['large' => $hires_avatar_large, 'full' => $hires_avatar_full],
-                'last_activity' => $last_activity_formatted,
+                'id' => $u_id,
+                'name' => $u_data->display_name,
+                'mention_name' => $u_data->user_nicename,
+                'link' => bp_members_get_user_url($u_id),
+                'avatar' => $avatar_url,
+                'avatar_urls' => [
+                    'full' => $avatar_url
+                ],
+                'hires_avatar' => isset($batch_avatars[$u_id]) ? $batch_avatars[$u_id] : [],
                 'age' => $age,
-                'zodiac' => $zodiac ?: null,
-                'faith' => $faith_val ?: null,
-                'politics' => $politics_val ?: null,
-                'work' => $work_val ?: null,
-                'diet' => $diet_val ?: null,
-                'numerology' => $numerology,
-                'zodiac_sign' => $zodiac_sign,
-                'bio' => $bio ?: null,
+                'bio' => $bio ? esc_html(wp_trim_words($bio, 15, '...')) : '',
+                'faith' => $faith_val,
+                'politics' => $politics_val,
+                'work' => $work_val,
+                'diet' => $diet_val,
+                'zodiac_sign' => $zodiac_val,
+                'last_activity' => isset($batch_activity[$u_id]) ? 'Aktywny/a ' . bp_core_time_since($batch_activity[$u_id]) : 'Aktywność nieznana',
+                'numerology' => $birth_date ? sk_calculate_life_path_number($birth_date) : null,
+                'zodiac' => $birth_date ? get_zodiac_sign($birth_date) : null,
             ];
+
         }
         return rest_ensure_response($results);
     }
-
     return rest_ensure_response([]);
 }
 
@@ -8096,6 +8142,179 @@ add_action('rest_api_init', function () {
     ]);
 });
 
+// ========================================
+// Update XProfile Field Endpoint (for Mobile App)
+// ========================================
+add_action('rest_api_init', function () {
+    register_rest_route('sk/v1', '/xprofile/update', [
+        'methods' => 'POST',
+        'callback' => 'sk_update_xprofile_field',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+});
+
+function sk_update_xprofile_field($request) {
+    $user_id = get_current_user_id();
+    
+    if (!$user_id) {
+        return new WP_Error('not_logged_in', 'Musisz być zalogowany', ['status' => 401]);
+    }
+    
+    $field_id = $request->get_param('field_id');
+    $value = $request->get_param('value');
+    
+    if (empty($field_id)) {
+        return new WP_Error('missing_field_id', 'Brakuje ID pola', ['status' => 400]);
+    }
+    
+    if (!function_exists('xprofile_set_field_data')) {
+        return new WP_Error('xprofile_not_active', 'XProfile nie jest aktywne', ['status' => 500]);
+    }
+    
+    $result = xprofile_set_field_data($field_id, $user_id, $value);
+    
+    if ($result) {
+        $updated_value = xprofile_get_field_data($field_id, $user_id);
+        return rest_ensure_response([
+            'success' => true,
+            'field_id' => $field_id,
+            'value' => $updated_value,
+            'message' => 'Pole zostało zaktualizowane'
+        ]);
+    } else {
+        return new WP_Error('update_failed', 'Nie udało się zaktualizować pola', ['status' => 500]);
+    }
+}
+
+
+/**
+ * Get single member details with xprofile
+ */
+function sk_get_single_member_endpoint($request) {
+    $user_id = $request->get_param('id');
+    
+    if ($user_id === 'me') {
+        $user_id = get_current_user_id();
+    }
+    
+    $user = get_userdata($user_id);
+    
+    if (!$user) {
+        return new WP_Error('user_not_found', 'User not found', ['status' => 404]);
+    }
+    
+    // Get full xprofile data using our batch helper (works for single too)
+    // $batch_xprofile = sk_get_batch_xprofile_data([$user_id]);
+    // $x_data = isset($batch_xprofile[$user_id]) ? $batch_xprofile[$user_id] : [];
+    
+    // Get avatar
+    $avatar_full = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]);
+    $avatar_thumb = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'thumb', 'html' => false]);
+    
+    // Get last activity
+    $last_activity = bp_core_get_last_activity($user_id, date("Y-m-d H:i:s"));
+
+    
+    $raw_groups = bp_xprofile_get_groups([
+        'user_id' => $user_id,
+        'fetch_fields' => true,
+        'fetch_field_data' => true
+    ]);
+    
+    $clean_groups = [];
+    if (!empty($raw_groups)) {
+        foreach ($raw_groups as $group) {
+            $clean_fields = [];
+            if (!empty($group->fields) && is_array($group->fields)) {
+                foreach ($group->fields as $field) {
+                    $field_value = xprofile_get_field_data($field->id, $user_id);
+                    
+                    if (is_array($field_value)) {
+                        $field_value = implode(', ', $field_value);
+                    }
+                    
+                    // Skip photo slots to avoid duplication with gallery
+                    if (stripos($field->name, 'zdjęcie') !== false || stripos($field->name, 'photo') !== false) {
+                        continue;
+                    }
+
+                    if (!empty($field_value)) {
+                        $clean_fields[] = [
+                            'id' => $field->id,
+                            'name' => $field->name,
+                            'value' => strip_tags((string)$field_value)
+                        ];
+                    }
+                }
+            }
+            
+            $clean_groups[] = [
+                'id' => $group->id,
+                'name' => $group->name,
+                'fields' => $clean_fields
+            ];
+        }
+    }
+    
+
+    // Check for mutual match
+    $current_user_id = get_current_user_id();
+    $is_matched = false;
+    if ($current_user_id && $current_user_id != $user_id) {
+        $my_likes = get_user_meta($current_user_id, 'sk_user_likes', true) ?: [];
+        $their_likes = get_user_meta($user_id, 'sk_user_likes', true) ?: [];
+        
+        if (is_array($my_likes) && is_array($their_likes)) {
+            if (in_array($user_id, array_map('intval', $my_likes)) && 
+                in_array($current_user_id, array_map('intval', $their_likes))) {
+                $is_matched = true;
+            }
+        }
+    }
+
+    // Simplify the response
+    return rest_ensure_response([
+        'id' => $user->ID,
+        'name' => $user->display_name,
+        'user_login' => $user->user_login,
+        'link' => bp_core_get_user_domain($user_id),
+        'avatar_urls' => [
+            'full' => $avatar_full,
+            'thumb' => $avatar_thumb
+        ],
+        'xprofile' => [
+            'groups' => $clean_groups
+        ],
+        'last_activity' => $last_activity,
+        'onboarding_complete' => (bool) get_user_meta($user_id, 'app_onboarding_complete', true),
+        'is_matched' => $is_matched,
+        'gallery' => (function($user_id) {
+            $photo_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
+            if (!is_array($photo_ids)) return [];
+            $photo_ids = array_unique($photo_ids); // Deduplicate IDs
+            $gallery = [];
+            $seen_urls = [];
+            foreach ($photo_ids as $pid) {
+                if ($pid) {
+                    $url = wp_get_attachment_image_url($pid, 'medium_large');
+                    if ($url && !in_array($url, $seen_urls)) {
+                        $seen_urls[] = $url;
+                        $gallery[] = [
+                            'id' => $pid,
+                            'url' => $url,
+                            'full' => wp_get_attachment_image_url($pid, 'full')
+                        ];
+                    }
+                }
+            }
+            return $gallery;
+        })($user_id),
+        // Add flattened fields for convenience if needed later, but frontend uses groups structure
+    ]);
+}
+
 /**
  * Get users who have liked the current user
  */
@@ -8109,32 +8328,43 @@ function sk_get_likes_me_endpoint($request) {
     // Get users who liked me
     $liked_me = get_user_meta($current_user_id, 'sk_liked_by_users', true) ?: [];
     
+    if (empty($liked_me)) {
+        return rest_ensure_response([]);
+    }
+
+    // BATCH FETCH ALL DATA
+    $batch_xprofile = sk_get_batch_xprofile_data($liked_me);
+    $batch_activity = sk_get_batch_last_activity($liked_me);
+    $batch_avatars = sk_get_batch_hires_avatars($liked_me);
+
     $results = [];
-    
     foreach ($liked_me as $user_id) {
         $user_data = get_userdata($user_id);
-        if (!$user_data) {
-            continue;
+        if (!$user_data) continue;
+        
+        $x_data = isset($batch_xprofile[$user_id]) ? $batch_xprofile[$user_id] : [];
+        
+        // Age calculation
+        $age = '';
+        $birth_date = isset($x_data['Data urodzenia']) ? $x_data['Data urodzenia'] : '';
+        if ($birth_date) {
+            $age = date_diff(date_create($birth_date), date_create('today'))->y;
         }
         
-        // Get high-res avatar from media library
-        $attach_id = get_user_meta($user_id, 'user_avatar_id', true);
+        $bio = isset($x_data['O mnie']) ? $x_data['O mnie'] : '';
+        $faith_val = isset($x_data['Podejście do wiary']) ? $x_data['Podejście do wiary'] : (isset($x_data['Wiara']) ? $x_data['Wiara'] : null);
+        $politics_val = isset($x_data['Poglądy Polityczne']) ? $x_data['Poglądy Polityczne'] : null;
+        $work_val = isset($x_data['Styl Pracy']) ? $x_data['Styl Pracy'] : (isset($x_data['Styl pracy']) ? $x_data['Styl pracy'] : null);
+        $diet_val = isset($x_data['Styl jedzenia']) ? $x_data['Styl jedzenia'] : (isset($x_data['Dieta']) ? $x_data['Dieta'] : null);
+        $zodiac_val = isset($x_data['Znak zodiaku']) ? $x_data['Znak zodiaku'] : (isset($x_data['Znak Zodiaku']) ? $x_data['Znak Zodiaku'] : null);
+        
         $avatar_url = '';
-        if ($attach_id) {
-            $avatar_url = wp_get_attachment_image_url($attach_id, 'large') ?: 
-                         wp_get_attachment_image_url($attach_id, 'full');
+        if (isset($batch_avatars[$user_id])) {
+            $avatar_url = $batch_avatars[$user_id]['large'] ?: $batch_avatars[$user_id]['full'] ?: '';
         }
-        // Fallback to BuddyPress avatar
         if (!$avatar_url) {
-            $avatar_url = bp_core_fetch_avatar(array(
-                'item_id' => $user_id,
-                'type' => 'full',
-                'html' => false
-            ));
+            $avatar_url = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]);
         }
-        
-        // Get last active time
-        $last_active = bp_get_user_last_activity($user_id);
         
         $results[] = [
             'id' => $user_id,
@@ -8143,11 +8373,15 @@ function sk_get_likes_me_endpoint($request) {
             'avatar_urls' => [
                 'full' => $avatar_url
             ],
-            'hires_avatar' => [
-                'large' => $attach_id ? wp_get_attachment_image_url($attach_id, 'large') : '',
-                'full' => $attach_id ? wp_get_attachment_image_url($attach_id, 'full') : '',
-            ],
-            'last_activity' => $last_active,
+            'hires_avatar' => isset($batch_avatars[$user_id]) ? $batch_avatars[$user_id] : [],
+            'age' => $age,
+            'bio' => $bio ? esc_html(wp_trim_words($bio, 15, '...')) : '',
+            'faith' => $faith_val,
+            'politics' => $politics_val,
+            'work' => $work_val,
+            'diet' => $diet_val,
+            'zodiac_sign' => $zodiac_val,
+            'last_activity' => isset($batch_activity[$user_id]) ? 'Aktywny/a ' . bp_core_time_since($batch_activity[$user_id]) : 'Aktywność nieznana',
         ];
     }
     
@@ -8165,7 +8399,70 @@ add_action('rest_api_init', function () {
             return is_user_logged_in();
         }
     ]);
+
+    // BLOCK User Endpoint
+    register_rest_route('sk/v1', '/block', [
+        'methods' => 'POST',
+        'callback' => 'sk_block_user_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
 });
+
+/**
+ * Block/Unblock a user
+ */
+function sk_block_user_endpoint($request) {
+    $current_user_id = get_current_user_id();
+    $target_user_id = intval($request->get_param('user_id'));
+    $action = $request->get_param('action') ?: 'block'; // block, unblock, toggle
+
+    if (!$current_user_id) {
+        return new WP_Error('not_logged_in', 'User must be logged in', ['status' => 401]);
+    }
+    
+    if (!$target_user_id || $current_user_id == $target_user_id) {
+        return new WP_Error('invalid_target', 'Invalid target user ID', ['status' => 400]);
+    }
+
+    $blocked_users = get_user_meta($current_user_id, 'sk_blocked_users', true);
+    if (!is_array($blocked_users)) {
+        $blocked_users = [];
+    }
+
+    // Ensure all IDs are integers
+    $blocked_users = array_map('intval', $blocked_users);
+
+    $is_blocked = in_array($target_user_id, $blocked_users);
+    $new_status = $is_blocked ? 'blocked' : 'unblocked';
+
+    if ($action === 'block' && !$is_blocked) {
+        $blocked_users[] = $target_user_id;
+        $new_status = 'blocked';
+    } elseif ($action === 'unblock' && $is_blocked) {
+        $blocked_users = array_diff($blocked_users, [$target_user_id]);
+        $new_status = 'unblocked';
+    } elseif ($action === 'toggle') {
+        if ($is_blocked) {
+            $blocked_users = array_diff($blocked_users, [$target_user_id]);
+            $new_status = 'unblocked';
+        } else {
+            $blocked_users[] = $target_user_id;
+            $new_status = 'blocked';
+        }
+    }
+
+    // Re-index array
+    $blocked_users = array_values($blocked_users);
+    
+    update_user_meta($current_user_id, 'sk_blocked_users', $blocked_users);
+
+    return rest_ensure_response([
+        'status' => $new_status,
+        'blocked_users' => $blocked_users // returning list for sync if needed
+    ]);
+}
 
 /**
  * Toggle like/unlike for a user
@@ -8182,6 +8479,18 @@ function sk_toggle_like_endpoint($request) {
     
     if (!$liked_id || $liker_id == $liked_id) {
         return new WP_Error('invalid_user_id', 'Invalid user ID', ['status' => 400]);
+    }
+
+    // SAFETY CHECK: Blocking
+    // 1. Did I block this user?
+    $my_blocked = get_user_meta($liker_id, 'sk_blocked_users', true) ?: [];
+    if (is_array($my_blocked) && in_array($liked_id, $my_blocked)) {
+        return new WP_Error('user_blocked', 'You have blocked this user', ['status' => 403]);
+    }
+    // 2. Did this user block me?
+    $their_blocked = get_user_meta($liked_id, 'sk_blocked_users', true) ?: [];
+    if (is_array($their_blocked) && in_array($liker_id, $their_blocked)) {
+        return new WP_Error('user_blocked_you', 'Action not allowed', ['status' => 403]);
     }
     
     // Get current likes - ensure all values are integers
@@ -8246,6 +8555,88 @@ function sk_toggle_like_endpoint($request) {
         'status' => $new_status,
         'is_match' => $is_mutual_match_possible && $new_status === 'liked'
     ]);
+}
+
+// ========================================
+// Custom Delete Thread Endpoint
+// ========================================
+add_action('rest_api_init', function () {
+    register_rest_route('sk/v1', '/thread/(?P<id>\d+)', [
+        'methods' => 'DELETE',
+        'callback' => 'sk_delete_thread_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+});
+
+function sk_delete_thread_endpoint($request) {
+    $thread_id = intval($request->get_param('id'));
+    $user_id = get_current_user_id();
+
+    if (!$thread_id) {
+        return new WP_Error('missing_param', 'Thread ID is required', ['status' => 400]);
+    }
+
+    if (!function_exists('messages_delete_thread')) {
+        return new WP_Error('bp_missing', 'BuddyPress messaging functions missing', ['status' => 500]);
+    }
+
+    $has_access = messages_check_thread_access($thread_id, $user_id);
+    $not_in_bp = false;
+
+    if (!$has_access) {
+        // Fallback: Check if user exists in the recipients table directly.
+        // This handles cases where one participant is deleted (ghost threads) causing BP checks to fail.
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'bp_messages_recipients';
+        $is_recipient = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table_name WHERE thread_id = %d AND user_id = %d", $thread_id, $user_id));
+
+        if (!$is_recipient) {
+             $not_in_bp = true;
+             // If user is truly not in BP recipients table, we continue to try BM archiving
+             // because the thread might still exist in BM's specifically synced tables.
+        }
+    }
+
+    // 1. Attempt removal in Better Messages (which manages the app's real-time view)
+    $deleted_bm = false;
+    if (class_exists('Better_Messages') && function_exists('Better_Messages')) {
+        try {
+            // Better Messages: remove_participant_from_thread is more permanent than archive_thread
+            // Archive as fallback if remove fails
+            $removed = Better_Messages()->functions->remove_participant_from_thread($thread_id, $user_id);
+            error_log("Delete Thread: BM remove_participant for user $user_id on thread $thread_id: " . ($removed ? 'SUCCESS' : 'FAILED'));
+            
+            if (!$removed) {
+                Better_Messages()->functions->archive_thread($thread_id, $user_id);
+                error_log("Delete Thread: BM archive_thread used as fallback for thread $thread_id");
+            }
+            $deleted_bm = true; // We treated it successfully from an API perspective
+        } catch (Exception $e) {
+            error_log('Delete Thread: Better Messages error: ' . $e->getMessage());
+        }
+    }
+
+    // 2. Attempt delete in BuddyPress (if user still appears as recipient)
+    $deleted_bp = false;
+    if (!$not_in_bp) {
+        $deleted_bp = messages_delete_thread($thread_id, $user_id);
+        error_log("Delete Thread: BP messages_delete_thread for user $user_id on thread $thread_id: " . ($deleted_bp ? 'SUCCESS' : 'FAILED'));
+    }
+
+    if ($deleted_bp || $deleted_bm || $not_in_bp) {
+        $msg = 'Thread deleted/hidden successfully';
+        if ($not_in_bp) $msg = 'Thread archived/removed in Better Messages (already missing in BP)';
+        
+        return rest_ensure_response([
+            'success' => true,
+            'message' => $msg,
+            'thread_id' => $thread_id
+        ]);
+    } else {
+        return new WP_Error('delete_failed', 'Could not delete or archive thread', ['status' => 500]);
+    }
 }
 
 // ========================================
@@ -8355,7 +8746,134 @@ add_action('rest_api_init', function () {
         'callback' => 'sk_register_user_with_avatar',
         'permission_callback' => '__return_true',
     ]);
+
+    register_rest_route('sk/v1', '/onboarding/update', [
+        'methods' => 'POST',
+        'callback' => 'sk_update_onboarding',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
 });
+
+function sk_update_onboarding($request) {
+    $user_id = get_current_user_id();
+    if (!$user_id) {
+        return new WP_Error('not_logged_in', 'Musisz być zalogowany', ['status' => 401]);
+    }
+
+    // --- FIELD MAPPING ---
+    $id_data_urodzenia = 107;
+    $id_kogo_szukam = 338;
+    $id_religia = 346;
+    $id_polityka = 351;
+    $id_praca = 356;
+    $id_dieta = 362;
+
+    // 1. Birthdate (BuddyPress specific format)
+    $birthdate = $request->get_param('dataurodzenia');
+    if (!empty($birthdate)) {
+        $datasql = date('Y-m-d 00:00:00', strtotime($birthdate));
+        xprofile_set_field_data($id_data_urodzenia, $user_id, $datasql);
+    }
+
+    // 2. Simple fields
+    $simple_fields = [
+        'kogo_szukam' => $id_kogo_szukam,
+        'religia'     => $id_religia,
+        'polityka'    => $id_polityka,
+        'praca'       => $id_praca,
+        'dieta'       => $id_dieta
+    ];
+
+    foreach ($simple_fields as $param => $field_id) {
+        $val = $request->get_param($param);
+        if (!empty($val)) {
+            xprofile_set_field_data($field_id, $user_id, sanitize_text_field($val));
+        }
+    }
+
+    // 3. Photos
+    require_once(ABSPATH . 'wp-admin/includes/file.php');
+    require_once(ABSPATH . 'wp-admin/includes/image.php');
+    require_once(ABSPATH . 'wp-admin/includes/media.php');
+
+    $files = $request->get_file_params();
+    $profile_photos_ids = [];
+
+    for ($i = 1; $i <= 6; $i++) {
+        $field_name = "photo_$i";
+        if (!empty($files[$field_name]) && $files[$field_name]['error'] === UPLOAD_ERR_OK) {
+            // Helper to handle the upload
+            $_FILES[$field_name] = $files[$field_name];
+            $attach_id = media_handle_upload($field_name, 0);
+
+            if (!is_wp_error($attach_id)) {
+                wp_update_post([
+                    'ID' => $attach_id,
+                    'post_author' => $user_id
+                ]);
+
+                $profile_photos_ids[] = $attach_id;
+
+                // First photo is the main avatar
+                if ($i === 1) {
+                    update_user_meta($user_id, 'user_avatar_id', $attach_id);
+                }
+
+                // rtMedia integration
+                if (class_exists('RTMediaModel')) {
+                    $rtmedia_model = new RTMediaModel();
+                    $attachment = get_post($attach_id);
+                    $rtmedia_data = [
+                        'blog_id'      => get_current_blog_id(),
+                        'media_id'     => $attach_id,
+                        'media_author' => $user_id,
+                        'media_title'  => $attachment->post_title,
+                        'album_id'     => 0,
+                        'context'      => 'profile',
+                        'context_id'   => $user_id,
+                        'media_type'   => 'photo',
+                        'upload_date'  => current_time('mysql'),
+                    ];
+                    $rtmedia_model->insert($rtmedia_data);
+                }
+            }
+        }
+    }
+
+    error_log("SK Update Onboarding: Data received: " . print_r($request->get_params(), true));
+    
+    if (!empty($profile_photos_ids)) {
+        $existing_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
+        if (!is_array($existing_ids)) $existing_ids = [];
+        
+        // If photo_1 (avatar) was uploaded, find and replace the old avatar ID in the gallery
+        $main_photo_id = $profile_photos_ids[0] ?? null; // Since we process in order, 1st one is usually main
+        $old_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+        
+        if ($old_avatar_id && in_array($old_avatar_id, $existing_ids)) {
+            // Replace old avatar ID with new one if photo_1 was uploaded
+            // We'll handle this by removing the old one and letting the merge add the new one
+            $existing_ids = array_filter($existing_ids, function($id) use ($old_avatar_id) {
+                return (int)$id !== (int)$old_avatar_id;
+            });
+        }
+        
+        $all_ids = array_unique(array_merge($existing_ids, $profile_photos_ids));
+        update_user_meta($user_id, 'user_profile_photos_ids', array_values($all_ids));
+        error_log("SK Update Onboarding: Updated user_profile_photos_ids for user $user_id. Total photos: " . count($all_ids));
+    }
+
+    // 4. Finalize
+    update_user_meta($user_id, 'app_onboarding_complete', true);
+
+    return rest_ensure_response([
+        'success' => true,
+        'message' => 'Profil został uzupełniony',
+        'onboarding_complete' => true
+    ]);
+}
 
 function sk_register_user_with_avatar($request) {
     $username = sanitize_user($request->get_param('user_login'));
@@ -8387,7 +8905,58 @@ function sk_register_user_with_avatar($request) {
     $files = $request->get_file_params();
     $has_avatar = !empty($files['avatar']) && $files['avatar']['error'] === UPLOAD_ERR_OK;
     
+    error_log("SK Registration: username=$username, email=$email, has_avatar=" . ($has_avatar ? 'YES' : 'NO'));
+    error_log("SK Registration: FILES count: " . count($files));
+    if (!empty($files)) {
+        error_log("SK Registration: FILES keys: " . implode(', ', array_keys($files)));
+        foreach ($files as $key_name => $file_info) {
+            error_log("SK Registration: File '$key_name' - name: {$file_info['name']}, error: {$file_info['error']}, size: {$file_info['size']}");
+        }
+    }
+    
     // Zarejestruj przez BuddyPress signup
+    global $wpdb;
+    
+    // Sprawdź czy użytkownik lub email już istnieje w wp_users (główna tabela WP)
+    if (username_exists($username)) {
+        error_log("SK Registration ERROR: Username '$username' already exists in wp_users.");
+        return new WP_Error('registration_failed', "Użytkownik o tym loginie już istnieje.", ['status' => 400]);
+    }
+    if (email_exists($email)) {
+        error_log("SK Registration ERROR: Email '$email' already exists in wp_users.");
+        return new WP_Error('registration_failed', "Użytkownik o tym adresie email już istnieje.", ['status' => 400]);
+    }
+    
+    // Sprawdź czy użytkownik już istnieje w tabeli signups (oczekujący na aktywację)
+    // Usuń WSZYSTKIE wpisy z tym emailem lub username
+    $existing_signups = $wpdb->get_results($wpdb->prepare(
+        "SELECT signup_id, user_login, user_email FROM {$wpdb->prefix}signups WHERE user_login = %s OR user_email = %s",
+        $username, $email
+    ));
+    
+    if (!empty($existing_signups)) {
+        error_log("SK Registration: Found " . count($existing_signups) . " existing signup(s) to delete");
+        foreach ($existing_signups as $existing_signup) {
+            error_log("SK Registration: Deleting signup - ID: {$existing_signup->signup_id}, login: {$existing_signup->user_login}, email: {$existing_signup->user_email}");
+            $wpdb->delete(
+                "{$wpdb->prefix}signups",
+                ['signup_id' => $existing_signup->signup_id],
+                ['%d']
+            );
+        }
+        error_log("SK Registration: Deleted all old signup entries");
+    }
+    
+    // Walidacja BuddyPress przed rejestracją
+    if (function_exists('bp_core_validate_user_signup')) {
+        $validation = bp_core_validate_user_signup($username, $email);
+        if (is_wp_error($validation['errors']) && $validation['errors']->get_error_messages()) {
+            $errors = $validation['errors']->get_error_messages();
+            error_log("SK Registration: BuddyPress validation errors: " . implode(', ', $errors));
+            // Kontynuuj mimo błędów walidacji (bo mogą być fałszywe pozytywne po usunięciu)
+        }
+    }
+
     $signup_id = bp_core_signup_user(
         $username,
         $password,
@@ -8398,16 +8967,45 @@ function sk_register_user_with_avatar($request) {
         ]
     );
     
+    global $wpdb;
+    error_log("SK Registration: bp_core_signup_user result: " . var_export($signup_id, true));
+
     if (is_wp_error($signup_id)) {
+        error_log("SK Registration Failed: " . $signup_id->get_error_message());
         return new WP_Error('registration_failed', $signup_id->get_error_message(), ['status' => 500]);
+    }
+
+    if (!$signup_id) {
+        if ($wpdb->last_error) {
+            error_log("SK Registration: Database Error during signup: " . $wpdb->last_error);
+        }
+        
+        // Sprawdź czy wpis ZOSTAŁ UTWORZONY mimo że funkcja zwróciła false
+        $created_signup = $wpdb->get_row($wpdb->prepare(
+            "SELECT signup_id, activation_key FROM {$wpdb->prefix}signups WHERE user_login = %s AND user_email = %s ORDER BY registered DESC LIMIT 1",
+            $username, $email
+        ));
+        
+        if ($created_signup) {
+            // Wpis istnieje - rejestracja się UDAŁA, funkcja tylko zwróciła zły result
+            error_log("SK Registration: bp_core_signup_user returned false but signup WAS created (ID: {$created_signup->signup_id}). Treating as SUCCESS.");
+            $signup_id = $created_signup->signup_id;
+            // Kontynuuj normalnie - nie zwracaj błędu
+        } else {
+            // Naprawdę nie ma wpisu - to jest prawdziwy błąd
+            error_log("SK Registration ERROR: bp_core_signup_user returned false and no signup was created.");
+            return new WP_Error('registration_failed_silently', 'Rejestracja nie powiodła się. Proszę spróbować ponownie.', ['status' => 500]);
+        }
     }
     
     // Dodatkowo zaktualizuj meta z hasłem
     global $wpdb;
-    $signup_row = $wpdb->get_row($wpdb->prepare(
-        "SELECT id, meta FROM {$wpdb->prefix}signups WHERE user_login = %s",
+    $signup_query = $wpdb->prepare(
+        "SELECT signup_id, meta FROM {$wpdb->prefix}signups WHERE user_login = %s",
         $username
-    ));
+    );
+    error_log("SK Registration: Signup query: $signup_query");
+    $signup_row = $wpdb->get_row($signup_query);
     
     if ($signup_row) {
         $meta = maybe_unserialize($signup_row->meta);
@@ -8419,31 +9017,56 @@ function sk_register_user_with_avatar($request) {
         $wpdb->update(
             $wpdb->prefix . 'signups',
             ['meta' => maybe_serialize($meta)],
-            ['id' => $signup_row->id]
+            ['signup_id' => $signup_row->signup_id]
         );
     }
     
     // Jeśli jest avatar, zapisz go tymczasowo z activation key
     if ($has_avatar) {
-        global $wpdb;
+        // Spróbuj pobrać activation key używając $signup_id
         $signup = $wpdb->get_row($wpdb->prepare(
-            "SELECT activation_key FROM {$wpdb->prefix}signups WHERE user_login = %s",
-            $username
+            "SELECT activation_key FROM {$wpdb->prefix}signups WHERE user_login = %s OR signup_id = %d",
+            $username,
+            $signup_id
         ));
         
         if ($signup && $signup->activation_key) {
             $upload_dir = wp_upload_dir();
             $temp_dir = $upload_dir['basedir'] . '/temp-avatars/';
             
+            error_log("SK Registration: Attempting to save avatar for key " . $signup->activation_key);
+            error_log("SK Registration: Temp dir path: $temp_dir");
+            
             if (!file_exists($temp_dir)) {
-                wp_mkdir_p($temp_dir);
+                if (wp_mkdir_p($temp_dir)) {
+                    error_log("SK Registration: Created temp dir $temp_dir");
+                } else {
+                    error_log("SK Registration ERROR: Failed to create temp dir $temp_dir");
+                }
+            }
+            
+            if (is_writable($temp_dir)) {
+                error_log("SK Registration: Temp dir is writable");
+            } else {
+                error_log("SK Registration ERROR: Temp dir is NOT writable: $temp_dir");
             }
             
             $ext = pathinfo($files['avatar']['name'], PATHINFO_EXTENSION);
+            if (empty($ext)) $ext = 'jpg';
             $temp_file = $temp_dir . $signup->activation_key . '.' . $ext;
             
-            move_uploaded_file($files['avatar']['tmp_name'], $temp_file);
+            if (move_uploaded_file($files['avatar']['tmp_name'], $temp_file)) {
+                error_log("SK Registration: Avatar saved successfully to $temp_file");
+                // Ustaw uprawnienia pliku
+                chmod($temp_file, 0644);
+            } else {
+                error_log("SK Registration ERROR: Failed to move uploaded file. Tmp name: " . $files['avatar']['tmp_name'] . " Target: $temp_file");
+            }
+        } else {
+            error_log("SK Registration ERROR: Could not find activation_key for $username (ID: $signup_id) in signups table");
         }
+    } else {
+        error_log("SK Registration: No avatar saved. has_avatar=" . ($has_avatar ? 'YES' : 'NO'));
     }
     
     return rest_ensure_response([
@@ -8463,9 +9086,17 @@ function sk_set_avatar_after_activation($user_id, $key, $user) {
     $upload_dir = wp_upload_dir();
     $temp_dir = $upload_dir['basedir'] . '/temp-avatars/';
     
+    // Listuj wszystkie pliki w katalogu dla debugowania
+    if (file_exists($temp_dir)) {
+        $all_temp_files = glob($temp_dir . '*');
+        error_log("SK Activation: All files in temp-avatars (" . count($all_temp_files) . "): " . print_r($all_temp_files, true));
+    } else {
+        error_log("SK Activation ERROR: Temp dir does NOT exist: $temp_dir");
+    }
+
     // Szukaj pliku z tym activation key
     $files = glob($temp_dir . $key . '.*');
-    error_log("Looking for avatar files: " . print_r($files, true));
+    error_log("SK Activation: Looking for avatar files for key '$key': " . print_r($files, true));
     
     if (!empty($files)) {
         $temp_file = $files[0];
@@ -8499,23 +9130,34 @@ function sk_set_avatar_after_activation($user_id, $key, $user) {
         $attach_id = wp_insert_attachment($attachment, $new_file_path);
         
         if (!is_wp_error($attach_id) && $attach_id) {
+            error_log("SK Activation: Successfully created attachment $attach_id");
             // Wygeneruj metadata dla attachment
             $attach_data = wp_generate_attachment_metadata($attach_id, $new_file_path);
             wp_update_attachment_metadata($attach_id, $attach_data);
-            
-            // 2. Ustaw user_avatar_id w user meta - TO JEST KLUCZOWE!
-            update_user_meta($user_id, 'user_avatar_id', $attach_id);
-            error_log("Set user_avatar_id to: $attach_id for user: $user_id");
             
             // Dodaj też do listy zdjęć profilowych
             $existing_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
             if (!is_array($existing_ids)) {
                 $existing_ids = [];
             }
+            
+            // If we are setting a NEW avatar ID, remove the OLD one from the gallery to avoid duplication
+            $old_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+            if ($old_avatar_id && in_array($old_avatar_id, $existing_ids)) {
+                $existing_ids = array_filter($existing_ids, function($id) use ($old_avatar_id) {
+                    return (int)$id !== (int)$old_avatar_id;
+                });
+            }
+
             if (!in_array($attach_id, $existing_ids)) {
                 $existing_ids[] = $attach_id;
-                update_user_meta($user_id, 'user_profile_photos_ids', $existing_ids);
+                update_user_meta($user_id, 'user_profile_photos_ids', array_values($existing_ids));
+                error_log("SK Activation: Added $attach_id to user_profile_photos_ids and removed old if existed");
             }
+            
+            // 2. Ustaw user_avatar_id w user meta - TO JEST KLUCZOWE!
+            update_user_meta($user_id, 'user_avatar_id', $attach_id);
+            error_log("Set user_avatar_id to: $attach_id for user: $user_id");
             
             // 3. Integracja z rtMedia (jeśli dostępne)
             if (class_exists('RTMediaModel')) {
@@ -8535,6 +9177,12 @@ function sk_set_avatar_after_activation($user_id, $key, $user) {
                 );
                 $rtmedia_model->insert($rtmedia_data);
                 error_log("Added avatar to rtMedia for user: $user_id");
+            }
+        } else {
+            if (is_wp_error($attach_id)) {
+                error_log("SK Activation ERROR: Failed to create attachment: " . $attach_id->get_error_message());
+            } else {
+                error_log("SK Activation ERROR: Failed to create attachment (unknown error)");
             }
         }
         
@@ -8556,13 +9204,13 @@ function sk_set_avatar_after_activation($user_id, $key, $user) {
             // Full size (150x150)
             $image->resize(150, 150, true);
             $image->save($avatar_full);
-            error_log("Saved full avatar");
+            error_log("SK Activation: Saved full avatar to $avatar_full");
             
             // Thumb size (50x50)
             $image = wp_get_image_editor($temp_file);
             $image->resize(50, 50, true);
             $image->save($avatar_thumb);
-            error_log("Saved thumb avatar");
+            error_log("SK Activation: Saved thumb avatar to $avatar_thumb");
         } else {
             error_log("Image editor error: " . $image->get_error_message());
         }
@@ -8571,7 +9219,7 @@ function sk_set_avatar_after_activation($user_id, $key, $user) {
         unlink($temp_file);
         error_log("Deleted temp file");
     } else {
-        error_log("No avatar file found for key: $key");
+        error_log("No avatar file found for key: $key in $temp_dir");
     }
 }
 
@@ -8582,37 +9230,141 @@ function sk_set_avatar_after_activation($user_id, $key, $user) {
 add_action('wp_footer', 'sk_mobile_activation_redirect');
 function sk_mobile_activation_redirect() {
     // Sprawdź czy jesteśmy na stronie aktywacji BuddyPress
-    if (!isset($_GET['key']) || strpos($_SERVER['REQUEST_URI'], 'activate') === false) {
+    if (strpos($_SERVER['REQUEST_URI'], 'activate') === false && strpos($_SERVER['REQUEST_URI'], 'aktywacja') === false) {
         return;
     }
     
-    $activation_key = sanitize_text_field($_GET['key']);
+    $activation_key = isset($_GET['key']) ? sanitize_text_field($_GET['key']) : '';
     ?>
+    <style>
+        .sk-activation-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-top: 25px;
+            align-items: center;
+        }
+        .sk-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 14px 24px;
+            border-radius: 30px;
+            text-decoration: none !important;
+            font-weight: bold;
+            width: 100%;
+            max-width: 300px;
+            transition: transform 0.2s, box-shadow 0.2s;
+            text-align: center;
+            font-size: 16px;
+        }
+        .sk-btn:active {
+            transform: scale(0.98);
+        }
+        .sk-btn-app {
+            background: linear-gradient(45deg, #FF6B9D, #C06C84);
+            color: white !important;
+            box-shadow: 0 4px 15px rgba(255, 107, 157, 0.3);
+        }
+        .sk-btn-web {
+            background: #f0f2f5;
+            color: #333 !important;
+            border: 1px solid #ddd;
+        }
+        .sk-btn i {
+            margin-right: 10px;
+            font-size: 20px;
+        }
+    </style>
     <script>
     (function() {
-        // Wykryj czy jest mobile
-        var isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        
-        if (isMobile && '<?php echo esc_js($activation_key); ?>') {
-            var appUrl = 'prawdziwamilosc://activate?key=<?php echo esc_js($activation_key); ?>';
+        console.log('SK Activation Script: Running');
+        document.addEventListener('DOMContentLoaded', function() {
+            // Szukaj komunikatu o sukcesie lub linku do logowania po aktywacji
+            // Szukamy linków, które zawierają "logowanie" lub "login" w URL, 
+            // lub mają tekst "Zaloguj" / "Zaloguj się"
+            var links = document.querySelectorAll('a');
+            console.log('SK Activation Script: Found ' + links.length + ' links total');
             
-            // Próbuj otworzyć aplikację
-            var iframe = document.createElement('iframe');
-            iframe.style.display = 'none';
-            iframe.src = appUrl;
-            document.body.appendChild(iframe);
+            var found = false;
+            links.forEach(function(link) {
+                var text = link.textContent.trim();
+                var href = link.href.toLowerCase();
+                
+                // Sprawdź czy link wygląda na link do logowania po aktywacji
+                if (
+                    (text === 'Zaloguj' || text === 'Zaloguj się' || text === 'Sign In' || text === 'Log In') ||
+                    (href.indexOf('logowanie') !== -1 || href.indexOf('login') !== -1)
+                ) {
+                    // Dodatkowe sprawdzenie, żeby nie podmienić linków w menu (jeśli są)
+                    // Zwykle link BuddyPress jest wewnątrz kontenera #activate-page lub .activate-status
+                    if (link.closest('#activate-page') || link.closest('.bp-template-notice') || link.closest('.activate-status') || links.length < 20) {
+                        console.log('SK Activation Script: Matching link found: ', text, href);
+                        
+                        var container = document.createElement('div');
+                        container.className = 'sk-activation-buttons';
+                        
+                        // Przycisk APKA
+                        var appBtn = document.createElement('a');
+                        appBtn.href = 'prawdziwamilosc://login';
+                        appBtn.className = 'sk-btn sk-btn-app';
+                        appBtn.innerHTML = '📱 Zaloguj się przez Aplikację';
+                        
+                        // Przycisk WEB
+                        var webBtn = document.createElement('a');
+                        webBtn.href = href || '/logowanie';
+                        webBtn.className = 'sk-btn sk-btn-web';
+                        webBtn.innerHTML = '🌐 Zaloguj przez Web';
+                        
+                        container.appendChild(appBtn);
+                        container.appendChild(webBtn);
+                        
+                        // Ukryj stary link i wstaw nowe przyciski
+                        link.style.display = 'none';
+                        link.parentNode.insertBefore(container, link.nextSibling);
+                        found = true;
+                    }
+                }
+            });
             
-            // Alternatywnie użyj window.location
-            setTimeout(function() {
-                window.location.href = appUrl;
-            }, 100);
+            if (!found) {
+                console.log('SK Activation Script: No specific activation login link found. Attempting fallback append.');
+                // Fallback: Dodaj przyciski na końcu głównego kontenera BuddyPress
+                var bpContainer = document.querySelector('#buddypress, #activate-page, .activate-status, .bp-template-notice');
+                if (bpContainer) {
+                    var container = document.createElement('div');
+                    container.className = 'sk-activation-buttons';
+                    container.style.marginTop = '20px';
+                    
+                    var appBtn = document.createElement('a');
+                    appBtn.href = 'prawdziwamilosc://login';
+                    appBtn.className = 'sk-btn sk-btn-app';
+                    appBtn.innerHTML = '📱 Zaloguj się przez Aplikację';
+                    
+                    var webBtn = document.createElement('a');
+                    webBtn.href = '/logowanie';
+                    webBtn.className = 'sk-btn sk-btn-web';
+                    webBtn.innerHTML = '🌐 Zaloguj przez Web';
+                    
+                    container.appendChild(appBtn);
+                    container.appendChild(webBtn);
+                    bpContainer.appendChild(container);
+                    console.log('SK Activation Script: Fallback append successful');
+                }
+            }
             
-            // Fallback - jeśli aplikacja nie otworzy się w ciągu 2 sekund,
-            // pozwól użytkownikowi aktywować przez web
-            setTimeout(function() {
-                document.body.removeChild(iframe);
-            }, 2000);
-        }
+            // Auto-redirect do apki jeśli wykryto klucz i mobile (stara logika)
+            var isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+            var activationKey = '<?php echo esc_js($activation_key); ?>';
+            
+            if (isMobile && activationKey && window.location.search.indexOf('key=') !== -1) {
+                console.log('SK Activation Script: Mobile detected with key, attempting auto-redirect');
+                var appUrl = 'prawdziwamilosc://activate?key=' + activationKey;
+                setTimeout(function() {
+                    window.location.href = appUrl;
+                }, 500);
+            }
+        });
     })();
     </script>
     <?php
@@ -8648,6 +9400,18 @@ function sk_send_message_endpoint($request) {
     
     if (!$recipient_id) {
         return new WP_Error('invalid_recipient', 'Recipient ID is required', ['status' => 400]);
+    }
+
+    // SAFETY CHECK: Blocking
+    // 1. Did I block this user?
+    $my_blocked = get_user_meta($sender_id, 'sk_blocked_users', true) ?: [];
+    if (is_array($my_blocked) && in_array($recipient_id, $my_blocked)) {
+        return new WP_Error('user_blocked', 'You have blocked this user', ['status' => 403]);
+    }
+    // 2. Did this user block me?
+    $their_blocked = get_user_meta($recipient_id, 'sk_blocked_users', true) ?: [];
+    if (is_array($their_blocked) && in_array($sender_id, $their_blocked)) {
+        return new WP_Error('user_blocked_you', 'Message not delivered', ['status' => 403]);
     }
     
     if (empty($message)) {
@@ -8730,7 +9494,164 @@ add_action('rest_api_init', function () {
             return current_user_can('administrator');
         }
     ]);
+    
+    // Delete User Account - Required by Apple App Store
+    register_rest_route('sk/v1', '/delete-account', [
+        'methods' => 'DELETE',
+        'callback' => 'sk_delete_user_account',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
 });
+
+/**
+ * Delete User Account - Required by Apple App Store
+ * Deletes user and all associated data (profile, messages, likes, etc.)
+ */
+function sk_delete_user_account(WP_REST_Request $request) {
+    $user_id = get_current_user_id();
+    
+    if (!$user_id) {
+        return new WP_Error('not_logged_in', 'Musisz być zalogowany', ['status' => 401]);
+    }
+    
+    // Get user data for email notification
+    $user = get_userdata($user_id);
+    $user_email = $user->user_email;
+    $user_name = $user->display_name;
+    
+    // 1. Delete Better Messages conversations
+    if (class_exists('Better_Messages')) {
+        global $wpdb;
+        
+        // Get all thread IDs where user is a participant
+        $threads = $wpdb->get_col($wpdb->prepare(
+            "SELECT thread_id FROM {$wpdb->prefix}bm_recipients WHERE user_id = %d",
+            $user_id
+        ));
+        
+        // Delete messages sent by this user
+        $wpdb->delete(
+            $wpdb->prefix . 'bm_messages',
+            ['sender_id' => $user_id],
+            ['%d']
+        );
+        
+        // Delete recipient entries
+        $wpdb->delete(
+            $wpdb->prefix . 'bm_recipients',
+            ['user_id' => $user_id],
+            ['%d']
+        );
+    }
+    
+    // 2. Delete BuddyPress data
+    if (function_exists('bp_is_active')) {
+        // Delete xProfile data
+        if (bp_is_active('xprofile')) {
+            global $wpdb;
+            $bp = buddypress();
+            $wpdb->delete($bp->profile->table_name_data, ['user_id' => $user_id], ['%d']);
+        }
+        
+        // Delete activity
+        if (bp_is_active('activity') && function_exists('bp_activity_delete')) {
+            bp_activity_delete(['user_id' => $user_id]);
+        }
+        
+        // Delete friends/friendships
+        if (bp_is_active('friends') && function_exists('friends_remove_friend')) {
+            global $wpdb;
+            $bp = buddypress();
+            $wpdb->query($wpdb->prepare(
+                "DELETE FROM {$bp->friends->table_name} WHERE initiator_user_id = %d OR friend_user_id = %d",
+                $user_id, $user_id
+            ));
+        }
+        
+        // Delete messages (BP private messages if not using Better Messages)
+        if (bp_is_active('messages')) {
+            global $wpdb;
+            $bp = buddypress();
+            // Delete from recipients
+            $wpdb->delete($bp->messages->table_name_recipients, ['user_id' => $user_id], ['%d']);
+            // Delete messages sent
+            $wpdb->delete($bp->messages->table_name_messages, ['sender_id' => $user_id], ['%d']);
+        }
+        
+        // Delete notifications
+        if (bp_is_active('notifications') && function_exists('bp_notifications_delete_notifications_by_type')) {
+            global $wpdb;
+            $bp = buddypress();
+            $wpdb->delete($bp->notifications->table_name, ['user_id' => $user_id], ['%d']);
+        }
+    }
+    
+    // 3. Delete likes data
+    delete_user_meta($user_id, 'sk_liked_users');
+    delete_user_meta($user_id, 'sk_matches');
+    delete_user_meta($user_id, 'sk_skipped_users');
+    delete_user_meta($user_id, 'sk_compatibility_cache');
+    delete_user_meta($user_id, 'sk_super_message_last_sent');
+    delete_user_meta($user_id, 'sk_super_message_pending_from');
+    
+    // 4. Remove this user from other users' likes/matches
+    global $wpdb;
+    $all_users = $wpdb->get_col("SELECT ID FROM {$wpdb->users}");
+    foreach ($all_users as $other_user_id) {
+        $liked = get_user_meta($other_user_id, 'sk_liked_users', true);
+        if (is_array($liked) && in_array($user_id, $liked)) {
+            $liked = array_diff($liked, [$user_id]);
+            update_user_meta($other_user_id, 'sk_liked_users', array_values($liked));
+        }
+        
+        $matches = get_user_meta($other_user_id, 'sk_matches', true);
+        if (is_array($matches) && in_array($user_id, $matches)) {
+            $matches = array_diff($matches, [$user_id]);
+            update_user_meta($other_user_id, 'sk_matches', array_values($matches));
+        }
+    }
+    
+    // 5. Delete avatar files
+    if (function_exists('bp_core_delete_existing_avatar')) {
+        bp_core_delete_existing_avatar(['item_id' => $user_id, 'object' => 'user']);
+    }
+    
+    // 6. Delete hi-res avatars
+    $hires_id = get_user_meta($user_id, 'hires_avatar_attachment_id', true);
+    if ($hires_id) {
+        wp_delete_attachment($hires_id, true);
+    }
+    
+    // 7. Send confirmation email
+    $subject = 'Potwierdzenie usunięcia konta - Prawdziwa Miłość';
+    $message = "Cześć {$user_name},\n\n";
+    $message .= "Potwierdzamy, że Twoje konto w serwisie Prawdziwa Miłość zostało pomyślnie usunięte.\n\n";
+    $message .= "Usunięte zostały:\n";
+    $message .= "- Wszystkie dane profilowe\n";
+    $message .= "- Historia wiadomości\n";
+    $message .= "- Polubienia i pary\n";
+    $message .= "- Przesłane zdjęcia\n\n";
+    $message .= "Jeśli chcesz wrócić do serwisu, zawsze możesz założyć nowe konto.\n\n";
+    $message .= "Życzymy wszystkiego dobrego!\n";
+    $message .= "Zespół Prawdziwa Miłość";
+    
+    wp_mail($user_email, $subject, $message);
+    
+    // 8. Finally, delete the WordPress user
+    require_once(ABSPATH . 'wp-admin/includes/user.php');
+    $result = wp_delete_user($user_id);
+    
+    if ($result) {
+        return new WP_REST_Response([
+            'success' => true,
+            'message' => 'Konto zostało pomyślnie usunięte'
+        ], 200);
+    } else {
+        return new WP_Error('delete_failed', 'Nie udało się usunąć konta', ['status' => 500]);
+    }
+}
 
 /**
  * Check if user is premium
@@ -9163,39 +10084,65 @@ function sk_super_message_inbox($request) {
  * Get Super Message status
  */
 function sk_super_message_status($request) {
-    $user_id = get_current_user_id();
-    
-    $is_premium = sk_is_premium_user($user_id);
-    $remaining = $is_premium ? sk_get_remaining_super_messages($user_id) : 0;
-    
-    $sent = get_user_meta($user_id, 'sk_super_messages_sent', true);
-    if (!is_array($sent)) $sent = [];
-    
-    // Enrich sent messages
-    $enriched_sent = [];
-    foreach ($sent as $msg) {
-        $recipient = get_userdata($msg['to']);
-        $enriched_sent[] = [
-            'id' => $msg['id'],
-            'to' => [
-                'id' => $msg['to'],
-                'name' => $recipient ? $recipient->display_name : 'Użytkownik'
-            ],
-            'timestamp' => $msg['timestamp'],
-            'status' => $msg['status']
-        ];
+    try {
+        $user_id = get_current_user_id();
+        error_log("SK Super Message Status: Start for user $user_id");
+        
+        $is_premium = sk_is_premium_user($user_id);
+        error_log("SK Super Message Status: is_premium checked: " . ($is_premium ? 'YES' : 'NO'));
+        
+        $remaining = $is_premium ? sk_get_remaining_super_messages($user_id) : 0;
+        
+        $sent = get_user_meta($user_id, 'sk_super_messages_sent', true);
+        if (!is_array($sent)) $sent = [];
+        
+        // Enrich sent messages
+        $enriched_sent = [];
+        foreach ($sent as $msg) {
+            $recipient = get_userdata($msg['to']);
+            $enriched_sent[] = [
+                'id' => $msg['id'],
+                'to' => [
+                    'id' => $msg['to'],
+                    'name' => $recipient ? $recipient->display_name : 'Użytkownik'
+                ],
+                'timestamp' => $msg['timestamp'],
+                'status' => $msg['status']
+            ];
+        }
+        
+        // Count inbox
+        $inbox = get_user_meta($user_id, 'sk_super_messages_received', true);
+        $inbox_count = is_array($inbox) ? count($inbox) : 0;
+        
+        error_log("SK Super Message Status: Success");
+        
+        return rest_ensure_response([
+            'is_premium' => $is_premium,
+            'remaining_this_week' => $remaining,
+            'sent' => $enriched_sent,
+            'inbox_count' => $inbox_count
+        ]);
+    } catch (Exception $e) {
+        error_log("SK Super Message Status CRITICAL ERROR: " . $e->getMessage());
+        // Return default safe response to prevent 500 on frontend
+        return rest_ensure_response([
+            'is_premium' => false,
+            'remaining_this_week' => 0,
+            'sent' => [],
+            'inbox_count' => 0,
+            'error' => 'Internal Server Error logged'
+        ]);
+    } catch (Error $e) {
+        error_log("SK Super Message Status PHP FATAL ERROR: " . $e->getMessage());
+        return rest_ensure_response([
+            'is_premium' => false,
+            'remaining_this_week' => 0,
+            'sent' => [],
+            'inbox_count' => 0,
+            'error' => 'Internal Fatal Error logged'
+        ]);
     }
-    
-    // Count inbox
-    $inbox = get_user_meta($user_id, 'sk_super_messages_received', true);
-    $inbox_count = is_array($inbox) ? count($inbox) : 0;
-    
-    return rest_ensure_response([
-        'is_premium' => $is_premium,
-        'remaining_this_week' => $remaining,
-        'sent' => $enriched_sent,
-        'inbox_count' => $inbox_count
-    ]);
 }
 
 /**
@@ -11959,8 +12906,7 @@ function sk_inject_premium_badge_global($avatar, $id_or_email, $size, $default, 
     if (!$user_id) return $avatar;
 
     // 2. Check Premium
-    // $is_premium = sk_is_premium_user($user_id);
-    $is_premium = true; // FORCE DEBUG
+    $is_premium = sk_is_premium_user($user_id);
 
     if ($is_premium) {
         // 3. Inject Badge
@@ -11981,3 +12927,1256 @@ function sk_inject_premium_badge_global($avatar, $id_or_email, $size, $default, 
     return $avatar;
 }
 add_filter('get_avatar', 'sk_inject_premium_badge_global', 100, 5);
+
+/**
+ * Dodaj banner Beta na górze strony
+ */
+function pm_display_beta_banner() {
+    // Wyświetl tylko dla zalogowanych użytkowników
+    if (!is_user_logged_in()) {
+        return;
+    }
+    
+    // Nie wyświetlaj w panelu admina
+    if (is_admin()) {
+        return;
+    }
+    ?>
+    <!-- Beta banner - pokazuje się tylko raz na sesję -->
+    <div id="pm-beta-banner" style="
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 999999;
+        background: linear-gradient(135deg, rgba(212, 175, 55, 0.95) 0%, rgba(244, 208, 63, 0.9) 100%);
+        border-bottom: 2px solid rgba(212, 175, 55, 0.5);
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+        padding: 12px 20px;
+        text-align: center;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        display: none;
+    ">
+        <div style="
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        ">
+            <span style="
+                background: rgba(26, 26, 26, 0.9);
+                color: #f4d03f;
+                font-weight: 700;
+                font-size: 0.75rem;
+                padding: 4px 10px;
+                border-radius: 4px;
+                letter-spacing: 0.5px;
+                text-transform: uppercase;
+            ">BETA</span>
+            <span style="
+                color: #1a1a1a;
+                font-size: 0.875rem;
+                font-weight: 500;
+                line-height: 1.4;
+            ">
+                Witamy w wersji testowej! Aplikacja jest w fazie rozwoju - mogą pojawić się błędy. Dziękujemy za cierpliwość i zgłaszanie uwag! 💙
+            </span>
+            <button onclick="pmCloseBetaBanner()" style="
+                background: rgba(26, 26, 26, 0.2);
+                border: 1px solid rgba(26, 26, 26, 0.3);
+                color: #1a1a1a;
+                padding: 4px 12px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 0.75rem;
+                font-weight: 600;
+                margin-left: auto;
+                transition: all 0.2s ease;
+            " onmouseover="this.style.background='rgba(26, 26, 26, 0.3)'" onmouseout="this.style.background='rgba(26, 26, 26, 0.2)'">
+                Ukryj
+            </button>
+        </div>
+    </div>
+    
+    <script>
+    // Funkcja do zamknięcia bannera i zapisania do sessionStorage
+    function pmCloseBetaBanner() {
+        document.getElementById('pm-beta-banner').style.display = 'none';
+        document.body.style.paddingTop = '0';
+        sessionStorage.setItem('pm_beta_banner_shown', 'true');
+    }
+    
+    // Sprawdź czy banner był już pokazany w tej sesji
+    (function() {
+        var banner = document.getElementById('pm-beta-banner');
+        if (!sessionStorage.getItem('pm_beta_banner_shown')) {
+            // Pierwszy raz w tej sesji - pokaż banner
+            banner.style.display = 'block';
+            sessionStorage.setItem('pm_beta_banner_shown', 'true');
+        } else {
+            // Banner już był pokazany - nie pokazuj
+            document.body.style.paddingTop = '0';
+        }
+    })();
+    </script>
+    
+    <style>
+        /* Dodaj padding do body żeby banner nie zakrywał contentu - tylko gdy banner widoczny */
+        body {
+            padding-top: 50px !important;
+        }
+        
+        /* Responsywność dla mobile */
+        @media (max-width: 768px) {
+            #pm-beta-banner {
+                padding: 10px 16px;
+                font-size: 0.8125rem;
+            }
+            
+            #pm-beta-banner > div {
+                flex-direction: column;
+                gap: 8px;
+            }
+            
+            #pm-beta-banner button {
+                margin-left: 0;
+                width: 100%;
+            }
+            
+            body {
+                padding-top: 80px !important;
+            }
+        }
+        
+        /* Usuń padding gdy banner jest ukryty */
+        body:has(#pm-beta-banner[style*="display: none"]) {
+            padding-top: 0 !important;
+        }
+    </style>
+    <?php
+}
+add_action('wp_body_open', 'pm_display_beta_banner', 1);
+// Fallback dla starszych wersji WordPress bez wp_body_open
+add_action('wp_footer', function() {
+    if (!did_action('wp_body_open')) {
+        pm_display_beta_banner();
+    }
+}, 1);
+
+/**
+ * ==============================================================
+ * SOFT BOARD - Przestrzeń Refleksji (Conscious Dating Board)
+ * ==============================================================
+ * Shortcode: [pm_activity_feed]
+ * A calm, intentional reflection space instead of typical social feed
+ */
+
+/**
+ * Get daily reflection prompt based on day of year
+ */
+function pm_get_daily_prompt() {
+    $prompts = array(
+        'Czego szukam w głębokiej relacji?',
+        'Co ostatnio pomogło mi lepiej rozumieć siebie?',
+        'Jaka wartość jest dla mnie najważniejsza w miłości?',
+        'Co mnie inspiruje w budowaniu bliskości?',
+        'Za co jestem dziś wdzięczny/a w kontekście relacji?',
+        'Czego się ostatnio nauczyłem/am o sobie?',
+        'Jak chcę się czuć w relacji?',
+        'Co oznacza dla mnie świadome randkowanie?',
+        'Jaką przestrzeń chcę tworzyć dla drugiej osoby?',
+        'Co pomaga mi być autentyczny/a?',
+        'Jaki jest mój sposób na okazywanie miłości?',
+        'Co mnie buduje jako partnera/partnerkę?',
+        'Czym się ostatnio podzieliłem/am z bliską osobą?',
+        'Jak dbam o swoją równowagę emocjonalną?'
+    );
+    
+    $day_of_year = date('z');
+    return $prompts[$day_of_year % count($prompts)];
+}
+
+/**
+ * Check if user can post (24h cooldown)
+ */
+function pm_check_posting_cooldown($user_id) {
+    $last_post_time = get_user_meta($user_id, 'pm_last_board_post_time', true);
+    
+    if (!$last_post_time) {
+        return array('can_post' => true, 'time_remaining' => 0);
+    }
+    
+    $cooldown_hours = 24;
+    $time_since_post = time() - intval($last_post_time);
+    $cooldown_seconds = $cooldown_hours * 3600;
+    
+    if ($time_since_post >= $cooldown_seconds) {
+        return array('can_post' => true, 'time_remaining' => 0);
+    }
+    
+    $remaining = $cooldown_seconds - $time_since_post;
+    $hours = floor($remaining / 3600);
+    $minutes = floor(($remaining % 3600) / 60);
+    
+    return array(
+        'can_post' => false, 
+        'time_remaining' => $remaining,
+        'time_display' => $hours . 'h ' . $minutes . 'min'
+    );
+}
+
+function pm_activity_feed_shortcode() {
+    // Check if user is logged in
+    if (!is_user_logged_in()) {
+        return '<p style="text-align:center; color:#8b7355; font-family: Georgia, serif;">Musisz być zalogowany, aby wejść do przestrzeni refleksji.</p>';
+    }
+    
+    $user_id = get_current_user_id();
+    $daily_prompt = pm_get_daily_prompt();
+    $cooldown = pm_check_posting_cooldown($user_id);
+    
+    // Get existing posts from BuddyPress Activity
+    $posts = array();
+    if (function_exists('bp_activity_get')) {
+        $activities = bp_activity_get(array(
+            'action' => 'activity_update',
+            'per_page' => 10,
+            'page' => 1
+        ));
+        if (!empty($activities['activities'])) {
+            $posts = $activities['activities'];
+        }
+    }
+    
+    ob_start();
+    ?>
+    
+    <div class="pm-soft-board-container">
+        
+        <!-- Guidelines Banner -->
+        <div class="pm-board-guidelines">
+            <h3>🌿 Przestrzeń Refleksji</h3>
+            <p>To miejsce do dzielenia się przemyśleniami o miłości, relacjach i osobistym rozwoju.</p>
+            <div class="pm-guidelines-list">
+                <span>💭 Pisz szczerze, z serca</span>
+                <span>🕊️ Szanuj intymność innych</span>
+                <span>🌱 Każdy jest na swojej drodze</span>
+            </div>
+        </div>
+        
+        <!-- Daily Prompt -->
+        <div class="pm-daily-prompt">
+            <span class="pm-prompt-label">Dzisiejsze pytanie do refleksji:</span>
+            <p class="pm-prompt-text"><?php echo esc_html($daily_prompt); ?></p>
+        </div>
+        
+        <!-- Post Composer -->
+        <div class="pm-post-composer <?php echo !$cooldown['can_post'] ? 'pm-composer-disabled' : ''; ?>">
+            <?php if (!$cooldown['can_post']): ?>
+                <div class="pm-cooldown-notice">
+                    <span class="pm-cooldown-icon">⏳</span>
+                    <p>Możesz podzielić się kolejną refleksją za <strong><?php echo $cooldown['time_display']; ?></strong></p>
+                    <small>Jeden post dziennie pozwala na głębsze przemyślenia.</small>
+                </div>
+            <?php else: ?>
+                <form id="pm-post-form" method="post">
+                    <?php wp_nonce_field('pm_soft_board_nonce', 'pm_soft_board_nonce'); ?>
+                    <div class="pm-composer-header">
+                        <div class="pm-composer-avatar">
+                            <?php echo get_avatar($user_id, 48); ?>
+                        </div>
+                        <div class="pm-composer-input-wrapper">
+                            <textarea 
+                                id="pm-post-content" 
+                                name="pm_post_content" 
+                                placeholder="Podziel się swoją refleksją..." 
+                                minlength="100"
+                                maxlength="500"
+                                rows="4"
+                            ></textarea>
+                            <div class="pm-char-info">
+                                <span class="pm-char-min">Min. 100 znaków</span>
+                                <span class="pm-char-counter">0/500</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="pm-post-composer-footer">
+                        <span class="pm-reflection-hint">💡 Zastanów się chwilę przed wysłaniem</span>
+                        <button type="submit" class="pm-post-button" disabled>
+                            <span class="pm-btn-text">Podziel się</span>
+                            <span class="pm-btn-loading" style="display:none;">Wysyłam...</span>
+                        </button>
+                    </div>
+                </form>
+            <?php endif; ?>
+        </div>
+        
+        <!-- Reflections Stream -->
+        <div id="pm-reflections-stream">
+            <h4 class="pm-stream-title">Refleksje społeczności</h4>
+            <div class="pm-reflections-list">
+                <?php if (empty($posts)): ?>
+                    <div class="pm-no-reflections">
+                        <span class="pm-empty-icon">🌱</span>
+                        <p>Bądź pierwszą osobą, która podzieli się refleksją.</p>
+                    </div>
+                <?php else: ?>
+                    <?php foreach ($posts as $post): 
+                        $post_user_id = $post->user_id;
+                        $display_name = bp_core_get_user_displayname($post_user_id);
+                        $avatar = get_avatar($post_user_id, 48);
+                        $content = wp_kses_post($post->content);
+                        $time_ago = human_time_diff(strtotime($post->date_recorded), current_time('timestamp')) . ' temu';
+                        $user_profile_url = bp_core_get_user_domain($post_user_id);
+                    ?>
+                        <article class="pm-reflection-item">
+                            <div class="pm-reflection-header">
+                                <a href="<?php echo esc_url($user_profile_url); ?>" class="pm-reflection-avatar">
+                                    <?php echo $avatar; ?>
+                                </a>
+                                <div class="pm-reflection-meta">
+                                    <a href="<?php echo esc_url($user_profile_url); ?>" class="pm-reflection-author"><?php echo esc_html($display_name); ?></a>
+                                    <span class="pm-reflection-time"><?php echo $time_ago; ?></span>
+                                </div>
+                            </div>
+                            <div class="pm-reflection-content">
+                                <?php echo $content; ?>
+                            </div>
+                            <div class="pm-reflection-footer">
+                                <a href="<?php echo esc_url($user_profile_url); ?>" class="pm-view-profile-link">Zobacz profil →</a>
+                            </div>
+                        </article>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+    
+    <style>
+        /* ===== SOFT BOARD - Calm, Intentional Design ===== */
+        
+        @import url('https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600&display=swap');
+        
+        .pm-soft-board-container {
+            max-width: 640px;
+            margin: 0 auto;
+            padding: 24px 16px;
+            background: linear-gradient(180deg, #faf9f6 0%, #f5f3ef 100%);
+            min-height: 100vh;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+        
+        /* Guidelines Banner */
+        .pm-board-guidelines {
+            background: linear-gradient(135deg, #f8f6f1 0%, #ede9e0 100%);
+            border: 1px solid #e0dcd3;
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+            text-align: center;
+        }
+        
+        .pm-board-guidelines h3 {
+            font-family: 'Crimson Text', Georgia, serif;
+            font-size: 1.5rem;
+            color: #5c5346;
+            margin: 0 0 12px 0;
+            font-weight: 600;
+        }
+        
+        .pm-board-guidelines p {
+            color: #7a7265;
+            font-size: 0.95rem;
+            margin: 0 0 16px 0;
+            line-height: 1.6;
+        }
+        
+        .pm-guidelines-list {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .pm-guidelines-list span {
+            color: #8b7355;
+            font-size: 0.85rem;
+        }
+        
+        /* Daily Prompt */
+        .pm-daily-prompt {
+            background: #fff;
+            border: 1px solid #e8e4dc;
+            border-left: 4px solid #b8a88a;
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 24px;
+        }
+        
+        .pm-prompt-label {
+            display: block;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: #a09485;
+            margin-bottom: 8px;
+        }
+        
+        .pm-prompt-text {
+            font-family: 'Crimson Text', Georgia, serif;
+            font-size: 1.25rem;
+            font-style: italic;
+            color: #5c5346;
+            margin: 0;
+            line-height: 1.5;
+        }
+        
+        /* Post Composer */
+        .pm-post-composer {
+            background: #fff;
+            border: 1px solid #e8e4dc;
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 32px;
+            box-shadow: 0 2px 12px rgba(92, 83, 70, 0.06);
+        }
+        
+        .pm-composer-disabled {
+            opacity: 0.9;
+        }
+        
+        .pm-cooldown-notice {
+            text-align: center;
+            padding: 16px;
+        }
+        
+        .pm-cooldown-icon {
+            font-size: 2rem;
+            display: block;
+            margin-bottom: 12px;
+        }
+        
+        .pm-cooldown-notice p {
+            color: #5c5346;
+            margin: 0 0 8px 0;
+        }
+        
+        .pm-cooldown-notice small {
+            color: #a09485;
+            font-size: 0.85rem;
+        }
+        
+        .pm-composer-header {
+            display: flex;
+            gap: 16px;
+        }
+        
+        .pm-composer-avatar img {
+            border-radius: 50%;
+            width: 48px;
+            height: 48px;
+            border: 2px solid #e8e4dc;
+        }
+        
+        .pm-composer-input-wrapper {
+            flex: 1;
+        }
+        
+        #pm-post-content {
+            width: 100%;
+            background: #faf9f6;
+            border: 1px solid #e0dcd3;
+            border-radius: 12px;
+            padding: 16px;
+            color: #3d3730;
+            font-size: 1rem;
+            font-family: 'Crimson Text', Georgia, serif;
+            line-height: 1.6;
+            resize: none;
+            min-height: 120px;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        
+        #pm-post-content:focus {
+            outline: none;
+            border-color: #b8a88a;
+            box-shadow: 0 0 0 3px rgba(184, 168, 138, 0.15);
+            background: #fff;
+        }
+        
+        #pm-post-content::placeholder {
+            color: #a09485;
+            font-style: italic;
+        }
+        
+        .pm-char-info {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 0.8rem;
+        }
+        
+        .pm-char-min {
+            color: #a09485;
+        }
+        
+        .pm-char-min.pm-satisfied {
+            color: #7a9b76;
+        }
+        
+        .pm-char-counter {
+            color: #a09485;
+        }
+        
+        .pm-char-counter.pm-warning {
+            color: #c4956a;
+        }
+        
+        .pm-post-composer-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #e8e4dc;
+        }
+        
+        .pm-reflection-hint {
+            color: #a09485;
+            font-size: 0.85rem;
+        }
+        
+        .pm-post-button {
+            background: linear-gradient(135deg, #8b7355 0%, #7a6548 100%);
+            color: #fff;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 24px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .pm-post-button:hover:not(:disabled) {
+            background: linear-gradient(135deg, #7a6548 0%, #6a563a 100%);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(139, 115, 85, 0.25);
+        }
+        
+        .pm-post-button:disabled {
+            background: #d4cfc5;
+            color: #a09485;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        /* Reflections Stream */
+        #pm-reflections-stream {
+            margin-top: 8px;
+        }
+        
+        .pm-stream-title {
+            font-family: 'Crimson Text', Georgia, serif;
+            font-size: 1.1rem;
+            color: #5c5346;
+            margin: 0 0 20px 0;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #e0dcd3;
+        }
+        
+        .pm-reflections-list {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .pm-no-reflections {
+            text-align: center;
+            padding: 48px 24px;
+            background: #fff;
+            border-radius: 16px;
+            border: 1px dashed #d4cfc5;
+        }
+        
+        .pm-empty-icon {
+            font-size: 2.5rem;
+            display: block;
+            margin-bottom: 16px;
+        }
+        
+        .pm-no-reflections p {
+            color: #7a7265;
+            margin: 0;
+        }
+        
+        /* Reflection Item */
+        .pm-reflection-item {
+            background: #fff;
+            border: 1px solid #e8e4dc;
+            border-radius: 16px;
+            padding: 24px;
+            transition: box-shadow 0.3s;
+        }
+        
+        .pm-reflection-item:hover {
+            box-shadow: 0 4px 16px rgba(92, 83, 70, 0.08);
+        }
+        
+        .pm-reflection-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .pm-reflection-avatar img {
+            border-radius: 50%;
+            width: 44px;
+            height: 44px;
+            border: 2px solid #e8e4dc;
+        }
+        
+        .pm-reflection-meta {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .pm-reflection-author {
+            color: #5c5346;
+            font-weight: 600;
+            text-decoration: none;
+            font-size: 0.95rem;
+        }
+        
+        .pm-reflection-author:hover {
+            color: #8b7355;
+        }
+        
+        .pm-reflection-time {
+            color: #a09485;
+            font-size: 0.8rem;
+        }
+        
+        .pm-reflection-content {
+            font-family: 'Crimson Text', Georgia, serif;
+            font-size: 1.1rem;
+            line-height: 1.7;
+            color: #3d3730;
+            margin-bottom: 16px;
+        }
+        
+        .pm-reflection-footer {
+            padding-top: 12px;
+            border-top: 1px solid #f0ece4;
+        }
+        
+        .pm-view-profile-link {
+            color: #8b7355;
+            font-size: 0.85rem;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        
+        .pm-view-profile-link:hover {
+            color: #6a563a;
+        }
+        
+        /* Mobile Responsive */
+        @media (max-width: 600px) {
+            .pm-soft-board-container {
+                padding: 16px 12px;
+            }
+            
+            .pm-board-guidelines {
+                padding: 20px 16px;
+            }
+            
+            .pm-guidelines-list {
+                flex-direction: column;
+                gap: 8px;
+            }
+            
+            .pm-daily-prompt {
+                padding: 16px;
+            }
+            
+            .pm-prompt-text {
+                font-size: 1.1rem;
+            }
+            
+            .pm-post-composer {
+                padding: 16px;
+            }
+            
+            .pm-composer-header {
+                flex-direction: column;
+                gap: 12px;
+            }
+            
+            .pm-composer-avatar {
+                display: none;
+            }
+            
+            .pm-post-composer-footer {
+                flex-direction: column;
+                gap: 12px;
+                align-items: stretch;
+            }
+            
+            .pm-reflection-hint {
+                text-align: center;
+            }
+            
+            .pm-post-button {
+                width: 100%;
+            }
+            
+            .pm-reflection-item {
+                padding: 16px;
+            }
+        }
+    </style>
+    
+    <script>
+    jQuery(document).ready(function($) {
+        const MIN_CHARS = 100;
+        const MAX_CHARS = 500;
+        let canSubmit = false;
+        
+        // Character counter and validation
+        $('#pm-post-content').on('input', function() {
+            const length = $(this).val().length;
+            const $charMin = $('.pm-char-min');
+            const $charCounter = $('.pm-char-counter');
+            const $button = $('.pm-post-button');
+            
+            // Update counter
+            $charCounter.text(length + '/' + MAX_CHARS);
+            
+            // Min chars indicator
+            if (length >= MIN_CHARS) {
+                $charMin.addClass('pm-satisfied').text('✓ Min. 100 znaków');
+            } else {
+                $charMin.removeClass('pm-satisfied').text('Min. 100 znaków (' + (MIN_CHARS - length) + ' więcej)');
+            }
+            
+            // Warning when approaching max
+            if (length > 450) {
+                $charCounter.addClass('pm-warning');
+            } else {
+                $charCounter.removeClass('pm-warning');
+            }
+            
+            // Enable/disable button
+            canSubmit = (length >= MIN_CHARS && length <= MAX_CHARS);
+            $button.prop('disabled', !canSubmit);
+        });
+        
+        // Form submission with reflection pause
+        $('#pm-post-form').on('submit', function(e) {
+            e.preventDefault();
+            
+            if (!canSubmit) return;
+            
+            const $button = $('.pm-post-button');
+            const $btnText = $('.pm-btn-text');
+            const $btnLoading = $('.pm-btn-loading');
+            const content = $('#pm-post-content').val();
+            
+            // Disable and show loading
+            $button.prop('disabled', true);
+            $btnText.hide();
+            $btnLoading.show();
+            
+            // 3-second reflection pause
+            setTimeout(function() {
+                // AJAX submit
+                $.ajax({
+                    url: '<?php echo admin_url('admin-ajax.php'); ?>',
+                    type: 'POST',
+                    data: {
+                        action: 'pm_create_soft_board_post',
+                        nonce: '<?php echo wp_create_nonce('pm_soft_board_nonce'); ?>',
+                        content: content
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            // Refresh to show new post
+                            location.reload();
+                        } else {
+                            alert(response.data.message || 'Wystąpił błąd');
+                            $btnText.show();
+                            $btnLoading.hide();
+                            $button.prop('disabled', false);
+                        }
+                    },
+                    error: function() {
+                        alert('Błąd połączenia. Spróbuj ponownie.');
+                        $btnText.show();
+                        $btnLoading.hide();
+                        $button.prop('disabled', false);
+                    }
+                });
+            }, 3000); // 3 second pause
+        });
+        
+        // Initial button state
+        $('.pm-post-button').prop('disabled', true);
+    });
+    </script>
+    
+    <?php
+    return ob_get_clean();
+}
+add_shortcode('pm_activity_feed', 'pm_activity_feed_shortcode');
+
+/**
+ * AJAX Handler: Create Soft Board Post (with cooldown)
+ */
+function pm_create_soft_board_post() {
+    check_ajax_referer('pm_soft_board_nonce', 'nonce');
+    
+    if (!is_user_logged_in()) {
+        wp_send_json_error(array('message' => 'Musisz być zalogowany'));
+    }
+    
+    $user_id = get_current_user_id();
+    $content = sanitize_textarea_field($_POST['content']);
+    
+    // Check cooldown
+    $cooldown = pm_check_posting_cooldown($user_id);
+    if (!$cooldown['can_post']) {
+        wp_send_json_error(array('message' => 'Możesz dodać refleksję za ' . $cooldown['time_display']));
+    }
+    
+    // Check min length
+    if (strlen($content) < 100) {
+        wp_send_json_error(array('message' => 'Refleksja musi mieć minimum 100 znaków'));
+    }
+    
+    // Check max length
+    if (strlen($content) > 500) {
+        wp_send_json_error(array('message' => 'Refleksja może mieć maksymalnie 500 znaków'));
+    }
+    
+    // Create the activity
+    if (function_exists('bp_activity_add')) {
+        $activity_id = bp_activity_add(array(
+            'user_id' => $user_id,
+            'content' => $content,
+            'component' => 'activity',
+            'type' => 'activity_update'
+        ));
+        
+        if ($activity_id) {
+            // Save cooldown timestamp
+            update_user_meta($user_id, 'pm_last_board_post_time', time());
+            wp_send_json_success(array('activity_id' => $activity_id));
+        } else {
+            wp_send_json_error(array('message' => 'Nie udało się zapisać refleksji'));
+        }
+    } else {
+        wp_send_json_error(array('message' => 'System nie jest dostępny'));
+    }
+}
+add_action('wp_ajax_pm_create_soft_board_post', 'pm_create_soft_board_post');
+
+/**
+ * AJAX Handler: Create Activity Post
+ */
+function pm_create_activity_post() {
+    check_ajax_referer('pm_activity_nonce', 'nonce');
+    
+    if (!is_user_logged_in()) {
+        wp_send_json_error(array('message' => 'Musisz być zalogowany'));
+    }
+    
+    $content = sanitize_textarea_field($_POST['content']);
+    
+    if (empty($content)) {
+        wp_send_json_error(array('message' => 'Post nie może być pusty'));
+    }
+    
+    if (function_exists('bp_activity_add')) {
+        $activity_id = bp_activity_add(array(
+            'user_id' => get_current_user_id(),
+            'content' => $content,
+            'component' => 'activity',
+            'type' => 'activity_update'
+        ));
+        
+        if ($activity_id) {
+            wp_send_json_success(array('activity_id' => $activity_id));
+        } else {
+            wp_send_json_error(array('message' => 'Nie udało się utworzyć posta'));
+        }
+    } else {
+        wp_send_json_error(array('message' => 'BuddyPress nie jest aktywny'));
+    }
+}
+add_action('wp_ajax_pm_create_activity_post', 'pm_create_activity_post');
+
+/**
+ * AJAX Handler: Delete Activity Post
+ */
+function pm_delete_activity_post() {
+    check_ajax_referer('pm_activity_nonce', 'nonce');
+    
+    if (!is_user_logged_in()) {
+        wp_send_json_error(array('message' => 'Musisz być zalogowany'));
+    }
+    
+    $activity_id = intval($_POST['activity_id']);
+    
+    if (function_exists('bp_activity_delete')) {
+        $activity = bp_activity_get_specific(array('activity_ids' => $activity_id));
+        
+        if ($activity && isset($activity['activities'][0])) {
+            $activity_obj = $activity['activities'][0];
+            
+            // Check if user owns this activity
+            if ($activity_obj->user_id == get_current_user_id()) {
+                if (bp_activity_delete(array('id' => $activity_id))) {
+                    wp_send_json_success();
+                }
+            } else {
+                wp_send_json_error(array('message' => 'Nie możesz usunąć tego posta'));
+            }
+        }
+    }
+    
+    wp_send_json_error(array('message' => 'Nie udało się usunąć posta'));
+}
+add_action('wp_ajax_pm_delete_activity_post', 'pm_delete_activity_post');
+
+/**
+ * ==============================================================
+ * CUSTOM ACTIVITY REST API ENDPOINT
+ * ==============================================================
+ * Since BuddyPress REST API might not be available,
+ * we create our own /sk/v1/activity endpoint
+ */
+
+/**
+ * Register custom activity REST routes
+ */
+function sk_register_activity_routes() {
+    // Get activity feed
+    register_rest_route('sk/v1', '/activity', array(
+        'methods' => 'GET',
+        'callback' => 'sk_get_activity_feed',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ));
+    
+    // Create activity post
+    register_rest_route('sk/v1', '/activity', array(
+        'methods' => 'POST',
+        'callback' => 'sk_create_activity_post',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ));
+    
+    // Delete activity post
+    register_rest_route('sk/v1', '/activity/(?P<id>\d+)', array(
+        'methods' => 'DELETE',
+        'callback' => 'sk_delete_activity_post',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ));
+    
+    // Favorite (like) activity
+    register_rest_route('sk/v1', '/activity/(?P<id>\d+)/favorite', array(
+        'methods' => 'POST',
+        'callback' => 'sk_favorite_activity',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ));
+    
+    // Unfavorite activity
+    register_rest_route('sk/v1', '/activity/(?P<id>\d+)/favorite', array(
+        'methods' => 'DELETE',
+        'callback' => 'sk_unfavorite_activity',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ));
+}
+add_action('rest_api_init', 'sk_register_activity_routes');
+
+/**
+ * Get activity feed
+ */
+function sk_get_activity_feed($request) {
+    if (!function_exists('bp_activity_get')) {
+        return new WP_Error('bp_disabled', 'BuddyPress not active', array('status' => 500));
+    }
+    
+    $page = $request->get_param('page') ?: 1;
+    $per_page = $request->get_param('per_page') ?: 20;
+    
+    $activities = bp_activity_get(array(
+        'action' => 'activity_update',
+        'display_comments' => 'stream',
+        'page' => $page,
+        'per_page' => $per_page
+    ));
+    
+    if (empty($activities['activities'])) {
+        return array();
+    }
+    
+    $formatted = array();
+    foreach ($activities['activities'] as $activity) {
+        $formatted[] = array(
+            'id' => $activity->id,
+            'user_id' => $activity->user_id,
+            'content' => $activity->content,
+            'date' => $activity->date_recorded,
+            'type' => $activity->type,
+            'name' => bp_core_get_user_displayname($activity->user_id),
+            'user_avatar' => array(
+                'full' => bp_core_fetch_avatar(array(
+                    'item_id' => $activity->user_id,
+                    'type' => 'full',
+                    'html' => false
+                ))
+            ),
+            'favorited' => bp_activity_is_favorite($activity->id, get_current_user_id()),
+            'favorite_count' => bp_activity_get_meta($activity->id, 'favorite_count') ?: 0,
+            'comment_count' => bp_activity_get_comment_count($activity->id)
+        );
+    }
+    
+    return rest_ensure_response($formatted);
+}
+
+/**
+ * Create activity post
+ */
+function sk_create_activity_post($request) {
+    if (!function_exists('bp_activity_add')) {
+        return new WP_Error('bp_disabled', 'BuddyPress not active', array('status' => 500));
+    }
+    
+    $content = $request->get_param('content');
+    
+    if (empty($content)) {
+        return new WP_Error('empty_content', 'Content cannot be empty', array('status' => 400));
+    }
+    
+    $activity_id = bp_activity_add(array(
+        'user_id' => get_current_user_id(),
+        'content' => sanitize_textarea_field($content),
+        'component' => 'activity',
+        'type' => 'activity_update'
+    ));
+    
+    if (!$activity_id) {
+        return new WP_Error('create_failed', 'Failed to create activity', array('status' => 500));
+    }
+    
+    $activity = bp_activity_get_specific(array('activity_ids' => $activity_id));
+    
+    if (empty($activity['activities'])) {
+        return new WP_Error('not_found', 'Activity not found', array('status' => 404));
+    }
+    
+    $act = $activity['activities'][0];
+    
+    return rest_ensure_response(array(
+        'id' => $act->id,
+        'user_id' => $act->user_id,
+        'content' => $act->content,
+        'date' => $act->date_recorded,
+        'type' => $act->type,
+        'name' => bp_core_get_user_displayname($act->user_id),
+        'user_avatar' => array(
+            'full' => bp_core_fetch_avatar(array(
+                'item_id' => $act->user_id,
+                'type' => 'full',
+                'html' => false
+            ))
+        ),
+        'favorited' => false,
+        'favorite_count' => 0,
+        'comment_count' => 0
+    ));
+}
+
+/**
+ * Delete activity post
+ */
+function sk_delete_activity_post($request) {
+    if (!function_exists('bp_activity_delete')) {
+        return new WP_Error('bp_disabled', 'BuddyPress not active', array('status' => 500));
+    }
+    
+    $activity_id = $request->get_param('id');
+    $activity = bp_activity_get_specific(array('activity_ids' => $activity_id));
+    
+    if (empty($activity['activities'])) {
+        return new WP_Error('not_found', 'Activity not found', array('status' => 404));
+    }
+    
+    $act = $activity['activities'][0];
+    
+    // Check ownership
+    if ($act->user_id != get_current_user_id()) {
+        return new WP_Error('forbidden', 'You can only delete your own posts', array('status' => 403));
+    }
+    
+    $deleted = bp_activity_delete(array('id' => $activity_id));
+    
+    if (!$deleted) {
+        return new WP_Error('delete_failed', 'Failed to delete activity', array('status' => 500));
+    }
+    
+    return rest_ensure_response(array('deleted' => true, 'previous' => array('id' => $activity_id)));
+}
+
+/**
+ * Favorite (like) activity
+ */
+function sk_favorite_activity($request) {
+    if (!function_exists('bp_activity_add_user_favorite')) {
+        return new WP_Error('bp_disabled', 'BuddyPress not active', array('status' => 500));
+    }
+    
+    $activity_id = $request->get_param('id');
+    $user_id = get_current_user_id();
+    
+    $result = bp_activity_add_user_favorite($activity_id, $user_id);
+    
+    if (!$result) {
+        return new WP_Error('favorite_failed', 'Failed to favorite activity', array('status' => 500));
+    }
+    
+    // Update favorite count
+    $count = bp_activity_get_meta($activity_id, 'favorite_count') ?: 0;
+    bp_activity_update_meta($activity_id, 'favorite_count', $count + 1);
+    
+    return rest_ensure_response(array('favorited' => true));
+}
+
+/**
+ * Unfavorite activity
+ */
+function sk_unfavorite_activity($request) {
+    if (!function_exists('bp_activity_remove_user_favorite')) {
+        return new WP_Error('bp_disabled', 'BuddyPress not active', array('status' => 500));
+    }
+    
+    $activity_id = $request->get_param('id');
+    $user_id = get_current_user_id();
+    
+    $result = bp_activity_remove_user_favorite($activity_id, $user_id);
+    
+    if (!$result) {
+        return new WP_Error('unfavorite_failed', 'Failed to unfavorite activity', array('status' => 500));
+    }
+    
+    // Update favorite count
+    $count = bp_activity_get_meta($activity_id, 'favorite_count') ?: 0;
+    bp_activity_update_meta($activity_id, 'favorite_count', max(0, $count - 1));
+    
+    return rest_ensure_response(array('favorited' => false));
+}
+
+/**
+ * ==============================================================
+ * AUTO-CREATE TABLICA (FEED) PAGE
+ * ==============================================================
+ * Automatically creates "Tablica" page with activity feed shortcode
+ */
+function pm_create_tablica_page() {
+    // Check if page already exists
+    $page = get_page_by_path('tablica');
+    
+    if ($page) {
+        return; // Page already exists
+    }
+    
+    // Create the page
+    $page_data = array(
+        'post_title'    => 'Tablica',
+        'post_content'  => '[pm_activity_feed]',
+        'post_status'   => 'publish',
+        'post_type'     => 'page',
+        'post_name'     => 'tablica',
+        'post_author'   => 1,
+        'comment_status' => 'closed',
+        'ping_status'   => 'closed'
+    );
+    
+    $page_id = wp_insert_post($page_data);
+    
+    if ($page_id && !is_wp_error($page_id)) {
+        // Log success
+        error_log('PM: Tablica page created successfully with ID: ' . $page_id);
+    }
+}
+// Run on admin_init to create page on first load
+add_action('admin_init', 'pm_create_tablica_page');
+
+/**
+ * ==============================================================
+ * AUTO-ADD TABLICA TO MENU
+ * ==============================================================
+ * Automatically adds Tablica page to primary navigation menu
+ */
+function pm_add_tablica_to_menu() {
+    // Get the Tablica page
+    $tablica_page = get_page_by_path('tablica');
+    
+    if (!$tablica_page) {
+        return; // Page doesn't exist yet
+    }
+    
+    // Get the primary menu (adjust 'primary' if your theme uses different menu location)
+    $locations = get_nav_menu_locations();
+    $menu_id = isset($locations['primary']) ? $locations['primary'] : 0;
+    
+    if (!$menu_id) {
+        // Try to find any menu
+        $menus = wp_get_nav_menus();
+        if (!empty($menus)) {
+            $menu_id = $menus[0]->term_id;
+        } else {
+            return; // No menu exists
+        }
+    }
+    
+    // Check if Tablica is already in the menu
+    $menu_items = wp_get_nav_menu_items($menu_id);
+    foreach ($menu_items as $item) {
+        if ($item->object_id == $tablica_page->ID) {
+            return; // Already in menu
+        }
+    }
+    
+    // Add Tablica to menu
+    wp_update_nav_menu_item($menu_id, 0, array(
+        'menu-item-title' => '📰 Tablica',
+        'menu-item-object' => 'page',
+        'menu-item-object-id' => $tablica_page->ID,
+        'menu-item-type' => 'post_type',
+        'menu-item-status' => 'publish',
+        'menu-item-position' => 4 // Position in menu (adjust as needed)
+    ));
+    
+    error_log('PM: Tablica added to menu successfully');
+}
+// Run after page is created
+add_action('admin_init', 'pm_add_tablica_to_menu', 20);
