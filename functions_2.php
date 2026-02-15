@@ -19,6 +19,8 @@ if ( ! defined( 'ONBOARDING_PAGE_ID' ) ) {
     define( 'ONBOARDING_PAGE_ID', 1339 );
 }
 
+// DEBUG: Capture Fatal Errors - REMOVED
+
 // Strona Dashboard
 if ( ! defined( 'DASHBOARD_PAGE_ID' ) ) {
     define( 'DASHBOARD_PAGE_ID', 1318 );
@@ -41,6 +43,202 @@ if ( ! defined( 'BP_AVATAR_THUMB_WIDTH' ) ) {
 }
 if ( ! defined( 'BP_AVATAR_THUMB_HEIGHT' ) ) {
     define( 'BP_AVATAR_THUMB_HEIGHT', 150 );
+}
+
+/**
+ * Admin Menu for Push Notifications
+ */
+add_action('admin_menu', function() {
+    add_menu_page(
+        'Powiadomienia Push',
+        'Powiadomienia Push',
+        'manage_options',
+        'sk-push-notifications',
+        'sk_render_push_admin_page',
+        'dashicons-megaphone',
+        30
+    );
+});
+
+/**
+ * Ensure the notifications table has a 'content' column for our broadcasts
+ */
+function sk_ensure_notifications_column() {
+    if (!is_admin() || !current_user_can('manage_options')) return;
+    
+    global $wpdb;
+    $table_name = function_exists('buddypress') && isset(buddypress()->notifications->table_name) 
+        ? buddypress()->notifications->table_name 
+        : $wpdb->prefix . 'bp_notifications';
+
+    // Check if column exists
+    $row = $wpdb->get_row("SHOW COLUMNS FROM $table_name LIKE 'content'");
+    if (!$row) {
+        $wpdb->query("ALTER TABLE $table_name ADD COLUMN content text DEFAULT NULL");
+    }
+}
+add_action('admin_init', 'sk_ensure_notifications_column');
+
+// TEMPORARY: Unblock Argen-Przyklad
+add_action('init', function() {
+    if ( isset($_GET['unblock_argen']) && current_user_can('manage_options') ) {
+        $argen = get_user_by('login', 'Argen-Przyklad');
+        if ($argen) {
+            $current_user_id = get_current_user_id();
+            $skipped = get_user_meta($current_user_id, 'sk_skipped_users', true);
+            if (is_array($skipped)) {
+                $new_skipped = array_diff($skipped, array($argen->ID));
+                update_user_meta($current_user_id, 'sk_skipped_users', $new_skipped);
+                echo "<div style='background:green;color:white;padding:20px;position:fixed;top:0;z-index:9999'>✅ Unblocked Argen-Przyklad (ID: {$argen->ID}) from User ID: $current_user_id</div>";
+            }
+        }
+    }
+});
+
+function sk_render_push_admin_page() {
+    if (!current_user_can('manage_options')) return;
+
+    $success = false;
+    global $wpdb;
+    $table_name = function_exists('buddypress') && isset(buddypress()->notifications->table_name) 
+        ? buddypress()->notifications->table_name 
+        : $wpdb->prefix . 'bp_notifications';
+
+    // Handle Deletion
+    if (isset($_POST['sk_delete_broadcast']) && check_admin_referer('sk_delete_broadcast_nonce')) {
+        $broadcast_id = (int)$_POST['broadcast_id'];
+        if ($broadcast_id > 0) {
+            $wpdb->query($wpdb->prepare(
+                "DELETE FROM $table_name WHERE component_name = 'custom_broadcast' AND item_id = %d",
+                $broadcast_id
+            ));
+            $success = "Usunięto ogłoszenie i powiadomienia u wszystkich użytkowników.";
+        }
+    }
+
+    // Handle Sending
+    if (isset($_POST['sk_send_push_broadcast']) && check_admin_referer('sk_send_push_nonce')) {
+        $title = sanitize_text_field($_POST['push_title']);
+        $body = sanitize_textarea_field($_POST['push_body']);
+        
+        if ($title && $body) {
+            // Send Push to those with tokens
+            $push_user_ids = $wpdb->get_col("SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key = 'sk_expo_push_token'");
+            if (!empty($push_user_ids)) {
+                sk_send_push_notification($push_user_ids, $title, $body, ['type' => 'broadcast']);
+            }
+
+            // Use a unique ID for this broadcast to group them (timestamp)
+            $broadcast_id = time();
+
+            // IMPORTANT: Save BuddyPress notification for ALL users
+            $all_user_ids = $wpdb->get_col("SELECT ID FROM {$wpdb->users} LIMIT 5000"); 
+            
+            if (function_exists('bp_notifications_add_notification')) {
+                foreach ($all_user_ids as $uid) {
+                    bp_notifications_add_notification([
+                        'user_id'           => $uid,
+                        'item_id'           => $broadcast_id,
+                        'secondary_item_id' => 0,
+                        'component_name'    => 'custom_broadcast',
+                        'component_action'  => 'broadcast_message',
+                        'date_notified'     => bp_core_current_time(),
+                        'is_new'            => 1
+                    ]);
+                }
+                
+                $wpdb->update(
+                    $table_name,
+                    ['content' => $title . ': ' . $body],
+                    ['item_id' => $broadcast_id, 'component_name' => 'custom_broadcast'],
+                    ['%s'],
+                    ['%d', '%s']
+                );
+            }
+            
+            $success = "Wysłano powiadomienie do " . count($push_user_ids) . " urządzeń. Historia zapisana dla " . count($all_user_ids) . " użytkowników.";
+        }
+    }
+
+    // Fetch History
+    $history = $wpdb->get_results("
+        SELECT item_id as broadcast_id, MAX(content) as content, MAX(date_notified) as date_notified, COUNT(*) as user_count 
+        FROM $table_name 
+        WHERE component_name = 'custom_broadcast' 
+        GROUP BY item_id 
+        ORDER BY date_notified DESC 
+        LIMIT 20
+    ");
+
+    ?>
+    <div class="wrap">
+        <h1>📣 System Powiadomień Push</h1>
+        
+        <?php if ($success): ?>
+            <div class="notice notice-success is-dismissible"><p><?php echo $success; ?></p></div>
+        <?php endif; ?>
+
+        <div style="display: flex; gap: 30px; margin-top: 20px;">
+            <!-- Form Column -->
+            <div style="flex: 1; background: #fff; padding: 20px; border: 1px solid #ccd0d4;">
+                <h2>Wyślij Nowe Ogłoszenie</h2>
+                <form method="post">
+                    <?php wp_nonce_field('sk_send_push_nonce'); ?>
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row"><label for="push_title">Tytuł</label></th>
+                            <td><input name="push_title" type="text" id="push_title" value="Prawdziwa Miłość" class="regular-text" required></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="push_body">Treść</label></th>
+                            <td><textarea name="push_body" id="push_body" rows="5" class="large-text" required placeholder="Napisz coś ważnego..."></textarea></td>
+                        </tr>
+                    </table>
+                    <p class="submit">
+                        <input type="submit" name="sk_send_push_broadcast" id="submit" class="button button-primary" value="Wyślij do wszystkich">
+                    </p>
+                </form>
+            </div>
+
+            <!-- History Column -->
+            <div style="flex: 1.5; background: #fff; padding: 20px; border: 1px solid #ccd0d4;">
+                <h2>Historia Ostatnich Powiadomień</h2>
+                <table class="wp-list-table widefat fixed striped">
+                    <thead>
+                        <tr>
+                            <th>Data</th>
+                            <th>Treść (skrót)</th>
+                            <th>Odbiorcy</th>
+                            <th style="width: 80px;">Akcja</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($history)): ?>
+                            <tr><td colspan="4">Brak wysłanych powiadomień.</td></tr>
+                        <?php else: ?>
+                            <?php foreach ($history as $h): ?>
+                                <tr>
+                                    <td><?php echo date('d.m.Y H:i', strtotime($h->date_notified)); ?></td>
+                                    <td><?php echo esc_html(wp_trim_words($h->content, 10)); ?></td>
+                                    <td><?php echo $h->user_count; ?></td>
+                                    <td>
+                                        <form method="post" onsubmit="return confirm('Czy na pewno chcesz usunąć to ogłoszenie u WSZYSTKICH użytkowników?');">
+                                            <?php wp_nonce_field('sk_delete_broadcast_nonce'); ?>
+                                            <input type="hidden" name="broadcast_id" value="<?php echo $h->broadcast_id; ?>">
+                                            <button type="submit" name="sk_delete_broadcast" class="button button-link" style="color: #d63638; text-decoration: none;">
+                                                <span class="dashicons dashicons-trash" style="margin-top: 4px;"></span> Usuń
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <?php
 }
 
 
@@ -1919,7 +2117,7 @@ add_shortcode('odwiedzili_mnie_link', 'odwiedzili_mnie_link_shortcode');
 add_action('after_setup_theme', 'hide_admin_bar_for_users');
 function hide_admin_bar_for_users()
 {
-    if (!current_user_can('manage_options') && !is_admin()) {
+    if (!is_admin()) {
         show_admin_bar(false);
     }
 }
@@ -2083,11 +2281,11 @@ function prawidlowa_aktywacja_uzytkownika($user_id, $key, $user)
 
     // 2. Poprawka na hasło
     if (isset($meta['temp_password_for_activation']) && !empty($meta['temp_password_for_activation'])) {
-        error_log("Setting password for user $user_id");
-        wp_set_password($meta['temp_password_for_activation'], $user_id);
-        error_log("Password set successfully");
+       error_log("Setting password for user $user_id");
+       wp_set_password($meta['temp_password_for_activation'], $user_id);
+       error_log("Password set successfully");
     } else {
-        error_log("No temp_password_for_activation found in meta!");
+       error_log("No temp_password_for_activation found in meta!");
     }
 
     // 3. Ustaw pola profilu xProfile
@@ -6718,7 +6916,7 @@ function render_step_three_form()
             'papierosy' => 'Papierosy',
             'alkohol' => 'Alkohol',
             'wyksztalcenie' => 'Wykształcenie',
-            'osobowosc' => 'Osobowość'
+            'personality' => 'Personality'
         ];
 
         foreach ($fields_map as $input_name => $bp_field_name) {
@@ -6819,10 +7017,10 @@ function render_step_three_form()
                 </div>
 
                 <div class="form-group">
-                    <label>Osobowość</label>
+                    <label>Personality</label>
                     <div class="radio-group">
-                        <label><input type="radio" name="osobowosc" value="Introwertyk"> Introwertyk</label>
-                        <label><input type="radio" name="osobowosc" value="Ekstrawertyk"> Ekstrawertyk</label>
+                        <label><input type="radio" name="personality" value="Introvert"> Introvert</label>
+                        <label><input type="radio" name="personality" value="Extrovert"> Extrovert</label>
                     </div>
                 </div>
             </div>
@@ -7055,35 +7253,123 @@ function sk_is_mutual_match($user_id_1, $user_id_2)
 
 function pm_strict_match_validation($errors, $recipients)
 {
-    // Jeśli nie ma zalogowanego usera, przerwij
-    if (!is_user_logged_in()) {
-        return $errors;
-    }
-
-    $sender_id = bp_loggedin_user_id();
-
-    // Sprawdzamy każdego odbiorcę
-    foreach ($recipients as $recipient) {
-        $recipient_id = (is_object($recipient)) ? $recipient->user_id : $recipient;
-
-        // Pomiń wysyłanie do samego siebie
-        if ($sender_id == $recipient_id) {
-            continue;
+    try {
+        // Safety check for recipients
+        if (empty($recipients)) {
+            return $errors;
         }
 
-        // --- SPRAWDZANIE ZNAJOMOŚCI (MATCHA) ---
-        $is_match = sk_is_mutual_match($sender_id, $recipient_id);
+        // Get Sender ID safely
+        $sender_id = function_exists('bp_loggedin_user_id') ? bp_loggedin_user_id() : get_current_user_id();
 
-        // Jeśli NIE MA matcha, dodajemy błąd krytyczny do obiektu $errors
-        if (!$is_match) {
+        // If no sender (not logged in), abort
+        if (!$sender_id) {
+            return $errors;
+        }
+
+        // BYPASS: Global Override
+        if (defined('SK_BYPASS_MATCH_CHECK') && SK_BYPASS_MATCH_CHECK === true) {
+            return $errors;
+        }
+
+        // BYPASS: Admin/Super Admin
+        if (user_can($sender_id, 'manage_options')) {
+            return $errors;
+        }
+
+        // BYPASS: Existing Thread Reply (Improve context detection)
+        $is_reply = false;
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+
+        // 1. Check $_REQUEST/$_POST for thread_id
+        if (!empty($_REQUEST['thread_id']) || !empty($_POST['thread_id'])) {
+            $is_reply = true;
+        }
+        // 2. Check REST Request (Better Messages specific URL pattern)
+        elseif (strpos($request_uri, '/better-messages/v1/thread/') !== false && strpos($request_uri, '/send') !== false) {
+            $is_reply = true;
+        }
+        // 3. Fallback: Check if JSON body has thread_id (for REST)
+        elseif (stripos($_SERVER['CONTENT_TYPE'] ?? '', 'application/json') !== false) {
+            $json = file_get_contents('php://input');
+            $data = json_decode($json, true);
+            if (isset($data['thread_id']) || (strpos($request_uri, '/thread/') !== false && isset($data['content']))) {
+                 // Heuristic: if it's a thread endpoint and has content, it's likely a reply
+                 $is_reply = true;
+            }
+        }
+
+        if ($is_reply) {
+            return $errors;
+        }
+
+        // Safe Recipient Iteration
+        $recipients_list = $recipients;
+        if (is_object($recipients)) {
+            // If it's a specific BP_Messages_Recipients object, it might not be iterable directly
+            $recipients_list = (array) $recipients;
+        }
+        
+        if (!is_array($recipients_list) && !is_iterable($recipients_list)) {
+            // If we can't iterate, we can't validate, so default to allow (to avoid blocking valid messages due to code errors)
+            error_log("pm_strict_match_validation: Recipients not iterable. Type: " . gettype($recipients));
+            return $errors;
+        }
+
+        foreach ($recipients_list as $recipient) {
+            // Safe recipient ID extraction
+            $recipient_id = 0;
+            if (is_numeric($recipient)) {
+                $recipient_id = (int) $recipient;
+            } elseif (is_object($recipient) && isset($recipient->user_id)) {
+                $recipient_id = (int) $recipient->user_id;
+            } elseif (is_array($recipient) && isset($recipient['user_id'])) {
+                $recipient_id = (int) $recipient['user_id'];
+            }
+
+            if (!$recipient_id) continue;
+
+            // Skip self
+            if ($sender_id == $recipient_id) {
+                continue;
+            }
+
+            // --- 1. MATCH CHECK ---
+            // Wrap in try-catch to be extra safe
+            try {
+                if (function_exists('sk_is_mutual_match') && sk_is_mutual_match($sender_id, $recipient_id)) {
+                    continue;
+                }
+            } catch (Throwable $t) {
+                error_log("sk_is_mutual_match error: " . $t->getMessage());
+                // On error, let it pass? Or fail? Better to fail open (allow) to avoid frustration if system is buggy
+                continue;
+            }
+
+            // --- 2. ALLOW CHECK (Pozwól na rozmowę) ---
+            $allowed_by_recipient = get_user_meta($recipient_id, 'sk_allowed_chat_ids', true) ?: [];
+            if (is_array($allowed_by_recipient) && in_array($sender_id, $allowed_by_recipient)) {
+                continue;
+            }
+
+            // Reverse check (if I allowed them, can I reply? Logic says yes if thread exists, but new thread? No.)
+            // But since strict connection requires mutual match, we stick to specific allows.
+            
+            // BLOCK: No match, no permission
             $errors->add(
                 'no_match_error',
                 __('Nie możesz wysłać wiadomości. Użytkownik nie jest Twoim parą (brak Matcha).', 'buddypress')
             );
         }
-    }
 
-    return $errors;
+        return $errors;
+
+    } catch (Throwable $t) {
+        // Critical safeguard: If ANYTHING fails in validation, log it and ALLOW the message.
+        // It's better to allow a potential spam message than to block all communication due to a 500 error.
+        error_log("CRITICAL ERROR in pm_strict_match_validation: " . $t->getMessage());
+        return $errors; 
+    }
 }
 add_filter('bp_messages_validate_send', 'pm_strict_match_validation', 10, 2);
 
@@ -7684,33 +7970,41 @@ function sk_get_batch_xprofile_data($user_ids) {
     
     $ids_placeholder = implode(',', array_map('intval', $user_ids));
     
-    // Define the fields we care about
+    // Define the fields we care about (both Names and important IDs for Empaths/PM)
     $fields_to_fetch = [
         'Data urodzenia', 'O mnie', 'Podejście do wiary', 'Poglądy Polityczne', 
-        'Styl Pracy', 'Styl jedzenia', 'Znak zodiaku'
+        'Styl Pracy', 'Styl jedzenia', 'Znak zodiaku', 'Personality', 'Numerology',
+        'About Me', 'What\'s your Faith', 'Political Views', 'Working Style', 'Eating Style',
+        'Faith', 'Religion', 'Politics', 'Work', 'Employment', 'Diet', 'Zodiac', 'Zodiac Sign'
     ];
+    $empaths_ids = [107, 303, 338, 343, 346, 351, 356, 362, 367, 133, 215, 108, 334, 6721, 6722]; // Expanded IDs for Empaths and PM fallback
+    
     $fields_placeholder = implode("','", array_map('esc_sql', $fields_to_fetch));
+    $ids_placeholder_fields = implode(",", $empaths_ids);
     
     $query = "
         SELECT d.user_id, f.name, d.value, f.id as field_id 
         FROM {$bp->profile->table_name_data} d
         JOIN {$bp->profile->table_name_fields} f ON d.field_id = f.id
         WHERE d.user_id IN ($ids_placeholder)
-        AND (f.name IN ('$fields_placeholder') OR f.id = 107)
+        AND (f.name IN ('$fields_placeholder') OR f.id IN ($ids_placeholder_fields))
     ";
     
     $raw_results = $wpdb->get_results($query);
     $formatted = [];
     
     foreach ($raw_results as $row) {
-        $key = $row->name;
-        // FORCE 'Data urodzenia' key for ID 107 to avoid encoding issues
+        $val = maybe_unserialize($row->value);
+        
+        // Key by Name (for legacy logic)
+        $formatted[$row->user_id][$row->name] = $val;
+        
+        // Key by ID (for robust Empaths logic)
+        $formatted[$row->user_id][$row->field_id] = $val;
+        
+        // Normalize specific keys for backward compatibility
         if ($row->field_id == 107) {
-            $key = 'Data urodzenia';
-        }
-        $formatted[$row->user_id][$key] = maybe_unserialize($row->value);
-        if ($row->field_id == 107) {
-     
+            $formatted[$row->user_id]['Data urodzenia'] = $val;
         }
     }
     
@@ -7725,23 +8019,76 @@ function sk_get_batch_last_activity($user_ids) {
     
     global $wpdb;
     $ids_placeholder = implode(',', array_map('intval', $user_ids));
-    
-    // BP stores last activity in user_meta with key 'last_activity'
-    $query = "
+    $formatted = [];
+
+    // 1. Try usermeta (common for BuddyPress)
+    $meta_results = $wpdb->get_results("
         SELECT user_id, meta_value 
         FROM {$wpdb->usermeta} 
         WHERE user_id IN ($ids_placeholder) 
         AND meta_key = 'last_activity'
-    ";
+    ");
     
-    $raw_results = $wpdb->get_results($query);
-    $formatted = [];
-    
-    foreach ($raw_results as $row) {
+    foreach ($meta_results as $row) {
         $formatted[$row->user_id] = $row->meta_value;
     }
     
+    // 2. Try BuddyPress activity table for missing IDs
+    $missing_ids = array_diff($user_ids, array_keys($formatted));
+    if (!empty($missing_ids)) {
+        $missing_placeholder = implode(',', array_map('intval', $missing_ids));
+        $bp_activity_table = $wpdb->prefix . 'bp_activity';
+        
+        // Check if table exists to avoid SQL errors
+        $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$bp_activity_table'");
+        
+        if ($table_exists) {
+            $activity_results = $wpdb->get_results("
+                SELECT user_id, date_recorded 
+                FROM $bp_activity_table 
+                WHERE user_id IN ($missing_placeholder) 
+                AND type = 'last_activity'
+            ");
+            
+            foreach ($activity_results as $row) {
+                if (!isset($formatted[$row->user_id])) {
+                    $formatted[$row->user_id] = $row->date_recorded;
+                }
+            }
+        }
+    }
+    
     return $formatted;
+}
+
+/**
+ * Format activity status for privacy
+ * Admins see full detail, users see "fuzzy" buckets
+ */
+function sk_format_activity_status($last_activity_date, $is_admin = false) {
+    if (empty($last_activity_date)) {
+        return 'Aktywność nieznana';
+    }
+
+    $last_active_timestamp = is_numeric($last_activity_date) ? $last_activity_date : strtotime($last_activity_date);
+    if (!$last_active_timestamp) {
+        return 'Aktywność nieznana';
+    }
+
+    if ($is_admin) {
+        // Detailed status for admins
+        return 'Aktywny/a ' . bp_core_time_since($last_active_timestamp);
+    }
+
+    $diff = time() - $last_active_timestamp;
+
+    if ($diff < 3600) {
+        return 'Dostępny/a teraz';
+    } elseif ($diff < 86400) {
+        return 'Dzisiaj';
+    } else {
+        return 'Niedawno';
+    }
 }
 
 /**
@@ -7791,6 +8138,14 @@ add_action('rest_api_init', function () {
         }
     ]);
 
+    register_rest_route('sk/v1', '/unread-count', [
+        'methods' => 'GET',
+        'callback' => 'sk_get_unread_count_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+
     // Single member endpoint with full details - supports 'me' or ID
     register_rest_route('sk/v1', '/member/(?P<id>[a-zA-Z0-9]+)', [
         'methods' => 'GET',
@@ -7799,7 +8154,611 @@ add_action('rest_api_init', function () {
             return is_user_logged_in();
         }
     ]);
+
+    // Notifications History endpoint
+    register_rest_route('sk/v1', '/notifications', [
+        'methods' => 'GET',
+        'callback' => 'sk_get_notifications_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+
+    // Delete Notification endpoint
+    register_rest_route('sk/v1', '/notifications/(?P<id>\d+)', [
+        'methods' => 'DELETE',
+        'callback' => 'sk_delete_notification_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+
+    // Mark Notifications as Read endpoint
+    register_rest_route('sk/v1', '/notifications/mark-read', [
+        'methods' => 'POST',
+        'callback' => 'sk_mark_notifications_read_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+
+    // Push Token Endpoints
+    register_rest_route('sk/v1', '/update-push-token', [
+        'methods' => 'POST',
+        'callback' => 'sk_update_push_token_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+
+    register_rest_route('sk/v1', '/push-token', [
+        'methods' => 'POST',
+        'callback' => 'sk_update_push_token_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
 });
+
+/**
+ * Update user preference (meta) - Dedicated registration to ensure it's picked up
+ */
+add_action('rest_api_init', function() {
+    register_rest_route('sk/v1', '/update-preference', [
+        'methods' => 'POST',
+        'callback' => 'sk_update_preference_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+});
+
+/**
+ * Delete a specific BuddyPress notification
+ */
+function sk_delete_notification_endpoint($request) {
+    if (!function_exists('bp_notifications_delete_notification')) {
+        return new WP_Error('bp_inactive', 'BuddyPress Notifications component is not active', ['status' => 500]);
+    }
+
+    $id = (int)$request['id'];
+    $user_id = get_current_user_id();
+
+    global $wpdb;
+    // Get BuddyPress notification table name safely
+    $table_name = function_exists('buddypress') && isset(buddypress()->notifications->table_name) 
+        ? buddypress()->notifications->table_name 
+        : $wpdb->prefix . 'bp_notifications';
+
+    // Verify ownership directly from DB before deletion
+    $notification_owner = $wpdb->get_var($wpdb->prepare(
+        "SELECT user_id FROM $table_name WHERE id = %d", 
+        $id
+    ));
+
+    if (!$notification_owner) {
+        return new WP_Error('not_found', 'Powiadomienie nie istnieje', ['status' => 404]);
+    }
+
+    if ((int)$notification_owner !== (int)$user_id) {
+        return new WP_Error('forbidden', 'Nie masz uprawnień do usunięcia tego powiadomienia', ['status' => 403]);
+    }
+
+    // Direct deletion
+    $deleted = $wpdb->query($wpdb->prepare(
+        "DELETE FROM $table_name WHERE id = %d", 
+        $id
+    ));
+
+    if ($deleted !== false) {
+        return rest_ensure_response(['success' => true]);
+    } else {
+        return new WP_Error('delete_failed', 'Błąd bazy danych przy usuwaniu powiadomienia', ['status' => 500]);
+    }
+}
+
+/**
+ * Mark notifications as read for the current user
+ */
+function sk_mark_notifications_read_endpoint($request) {
+    if (!function_exists('buddypress')) {
+        return new WP_Error('bp_inactive', 'BuddyPress is not active', ['status' => 500]);
+    }
+
+    $user_id = get_current_user_id();
+    $notification_id = $request->get_param('id'); // Optional: if provided, marks only this one. If empty, marks all for user.
+    
+    global $wpdb;
+    $table_name = isset(buddypress()->notifications->table_name) 
+        ? buddypress()->notifications->table_name 
+        : $wpdb->prefix . 'bp_notifications';
+
+    if (!empty($notification_id)) {
+        // Mark specific notification as read
+        $updated = $wpdb->update(
+            $table_name,
+            ['is_new' => 0],
+            ['id' => (int)$notification_id, 'user_id' => $user_id],
+            ['%d'],
+            ['%d', '%d']
+        );
+    } else {
+        // Mark all notifications as read for this user
+        $updated = $wpdb->update(
+            $table_name,
+            ['is_new' => 0],
+            ['user_id' => $user_id, 'is_new' => 1],
+            ['%d'],
+            ['%d', '%d']
+        );
+    }
+
+    return rest_ensure_response(['success' => true]);
+}
+
+/**
+ * Get the current user's BuddyPress notifications
+ */
+function sk_get_notifications_endpoint($request) {
+    if (!function_exists('buddypress')) {
+        return new WP_Error('bp_inactive', 'BuddyPress is not active', ['status' => 500]);
+    }
+
+    $user_id = get_current_user_id();
+    global $wpdb;
+    $table_name = isset(buddypress()->notifications->table_name) 
+        ? buddypress()->notifications->table_name 
+        : $wpdb->prefix . 'bp_notifications';
+
+    // Fetch notifications directly to include our custom 'content' column and get history
+    $notifications = $wpdb->get_results($wpdb->prepare("
+        SELECT * FROM $table_name 
+        WHERE user_id = %d 
+        ORDER BY date_notified DESC 
+        LIMIT 50
+    ", $user_id));
+    
+    $formatted = [];
+    if (!empty($notifications)) {
+        foreach ($notifications as $n) {
+            $item = [
+                'id' => (int)$n->id,
+                'component' => $n->component_name,
+                'action' => $n->component_action,
+                'date' => $n->date_notified,
+                'is_new' => (int)$n->is_new,
+                'title' => 'Powiadomienie',
+                'body' => '',
+                'data' => [
+                    'item_id' => (int)$n->item_id,
+                    'secondary_item_id' => (int)$n->secondary_item_id
+                ]
+            ];
+
+            // Resolve content
+            switch ($n->component_name) {
+                case 'messages':
+                    $item['title'] = 'Nowa wiadomość';
+                    $sender_name = bp_core_get_user_displayname($n->item_id);
+                    $item['body'] = $sender_name . ' wysłał(a) Ci wiadomość.';
+                    $item['type'] = 'message';
+                    break;
+                case 'custom_broadcast':
+                    $item['title'] = 'Ogłoszenie';
+                    // Use the custom content column!
+                    $item['body'] = $n->content ? $n->content : 'Masz nową wiadomość od administratora.';
+                    $item['type'] = 'broadcast';
+                    break;
+                case 'members':
+                    if ($n->component_action === 'new_match') {
+                         $item['title'] = 'Nowy Match! 💖';
+                         $matched_name = bp_core_get_user_displayname($n->item_id);
+                         $item['body'] = 'Masz nowe dopasowanie z ' . $matched_name;
+                         $item['type'] = 'match';
+                    }
+                    break;
+            }
+
+            $formatted[] = $item;
+        }
+    }
+
+    return rest_ensure_response($formatted);
+}
+
+/**
+ * Core function to send Push Notification via Expo
+ * 
+ * @param int|array $user_ids Single ID or array of user IDs
+ * @param string $title Notification title
+ * @param string $body Notification body
+ * @param array $data Optional data payload
+ */
+function sk_send_push_notification($user_ids, $title, $body, $data = []) {
+    $log_file = dirname(__FILE__) . '/sk_push.log';
+    $log_debug = function($msg) use ($log_file) {
+        $ts = date('Y-m-d H:i:s');
+        @file_put_contents($log_file, "[$ts] $msg" . PHP_EOL, FILE_APPEND);
+    };
+
+    $uids = is_array($user_ids) ? array_map('intval', $user_ids) : [(int)$user_ids];
+    $current_thread_id = isset($data['thread_id']) ? (int)$data['thread_id'] : 0;
+    $sender_id = isset($data['sender_id']) ? (int)$data['sender_id'] : 0;
+    $current_logged_in_uid = (int)get_current_user_id();
+
+    $log_debug("PUSH: CALLED for users [" . implode(',', $uids) . "] | T:$current_thread_id | S:$sender_id");
+    
+    if (empty($uids)) {
+        error_log("PUSH DEBUG: FAILURE - Empty user_ids");
+        return false;
+    }
+
+    
+    $messages = [];
+    foreach ($uids as $target_uid) {
+        if ($target_uid <= 0) continue;
+
+        // 1. Self Check
+        if ($target_uid === $sender_id || ($current_logged_in_uid > 0 && $target_uid === $current_logged_in_uid)) {
+            error_log("PUSH DEBUG [$target_uid]: ABORT - Self notification (S:$sender_id, L:$current_logged_in_uid)");
+            continue;
+        }
+
+        // 2. Throttling Check (Persistent until read)
+        $alerted = get_user_meta($target_uid, 'sk_alerted_threads', true);
+        if (!is_array($alerted)) $alerted = [];
+        
+        $is_silent = false;
+        if ($current_thread_id && in_array((int)$current_thread_id, array_map('intval', $alerted))) {
+            $is_silent = true;
+            $log_debug("PUSH [$target_uid][T:$current_thread_id]: SILENT - Already alerted.");
+        } else {
+            if ($current_thread_id) {
+                $alerted[] = (int)$current_thread_id;
+                update_user_meta($target_uid, 'sk_alerted_threads', array_unique($alerted));
+                $log_debug("PUSH [$target_uid][T:$current_thread_id]: VOCAL - First alert for this thread.");
+            }
+        }
+
+        // 3. Duplicate Lock (Safety for rapid events)
+        $lock_key = "sk_push_lock_{$target_uid}_{$current_thread_id}";
+        if (!$is_silent && get_transient($lock_key)) {
+            $log_debug("PUSH [$target_uid][T:$current_thread_id]: ABORT - Lock active (3s).");
+            continue;
+        }
+        if (!$is_silent) set_transient($lock_key, 1, 3);
+
+        // 4. Badge Calculation (Skip Reset during push to avoid race conditions)
+        $badge = 0;
+        $unread_resp = sk_get_unread_count_endpoint($target_uid, true);
+        if (is_object($unread_resp)) {
+            $rd = $unread_resp->get_data();
+            $badge = (int)($rd['unread_count'] ?? 0);
+        }
+        
+        $user_data = $data;
+        $user_data['unread_count'] = $badge;
+
+        // 5. Gather Tokens
+        $tokens = get_user_meta($target_uid, 'sk_expo_push_token', false);
+        if (!is_array($tokens) || empty($tokens)) {
+            $log_debug("PUSH [$target_uid]: FAILURE - No tokens found.");
+            continue;
+        }
+
+        foreach ($tokens as $token) {
+            if (empty($token)) continue;
+            
+            $payload = [
+                'to' => $token,
+                'data' => $user_data,
+                'badge' => (int)$badge,
+                'sound' => 'default'
+            ];
+
+            if (!$is_silent) {
+                $payload['title'] = $title;
+                $payload['body'] = $body;
+            } else {
+                unset($payload['sound']);
+                $log_debug("PUSH [$target_uid]: Adding SILENT payload for token " . substr($token, -6));
+            }
+
+            if (isset($data['collapse_id'])) {
+                $payload['collapseId'] = $data['collapse_id'];
+            }
+
+            $messages[] = $payload;
+        }
+    }
+
+    if (empty($messages)) {
+        $log_debug("PUSH: ABORT - No payloads to send.");
+        return false;
+    }
+    
+    // Send to Expo Push API
+    $log_debug("PUSH: Sending " . count($messages) . " messages to Expo.");
+    $response = wp_remote_post('https://exp.host/--/api/v2/push/send', [
+        'headers' => [
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json',
+            'Accept-encoding' => 'gzip, deflate',
+        ],
+        'body' => json_encode($messages),
+        'timeout' => 15,
+    ]);
+    
+    if (is_wp_error($response)) {
+        $log_debug("PUSH ERROR: " . $response->get_error_message());
+        return false;
+    }
+    
+    $log_debug("PUSH SUCCESS: Batch sent.");
+    
+    return true;
+}
+
+/**
+ * Send Push Notification for new messages
+ */
+/**
+ * Send Push Notification for new messages WITH SMART THROTTLING
+ */
+function sk_push_on_message_sent($message) {
+    try {
+        if (!is_object($message) || empty($message->sender_id) || empty($message->thread_id) || empty($message->recipients)) {
+            return;
+        }
+
+        // 1. Cooldown to prevent duplicate triggers (BP + BM hooks often trigger together)
+        $thread_id = $message->thread_id;
+        $sender_id = $message->sender_id;
+        
+        // --- SMART THROTTLING: RESET SENDER ---
+        // If I am sending a message, I am 'active'. Clear my throttle so I get the NEXT notification immediately.
+        $my_throttle_key = 'sk_push_throttle_' . $sender_id . '_' . $thread_id;
+        delete_transient($my_throttle_key);
+
+        static $push_processed_in_this_request = [];
+        $request_key = $sender_id . '_' . $thread_id;
+        if (in_array($request_key, $push_processed_in_this_request)) {
+            return; // Already handled in this PHP request cycle
+        }
+        $push_processed_in_this_request[] = $request_key;
+
+        // Lock for duplicate prevention (technical 5s lock across requests)
+        $lock_key = 'sk_push_lock_' . $sender_id . '_' . $thread_id;
+        if (get_transient($lock_key)) {
+            return; // Skip if sent in last 5 seconds
+        }
+        set_transient($lock_key, 1, 5);
+
+        foreach ($message->recipients as $recipient) {
+            // Safety check for recipient object
+            if (!is_object($recipient) || empty($recipient->user_id)) continue;
+            
+            $recipient_id = (int) $recipient->user_id;
+            $sender_compare_id = (int) $sender_id;
+
+            // 1. Strict Sender Check
+            if ($recipient_id === $sender_compare_id) {
+                continue;
+            }
+
+            // 2. Extra safety: Check against logged-in user
+            $current_user = get_current_user_id();
+            if ($current_user && $recipient_id === $current_user) {
+                error_log("PUSH DEBUG: Skipped self-notification (current_user match) for $recipient_id");
+                continue;
+            }
+
+            if ($recipient_id != $sender_id) {
+                // --- SMART THROTTLING LOGIC ---
+                // Temporarily DISABLED for Debugging
+                $recipient_throttle_key = 'sk_push_throttle_' . $recipient_id . '_' . $thread_id;
+                
+                // if (get_transient($recipient_throttle_key)) {
+                //    error_log("PUSH DEBUG: Throttled for $recipient_id on thread $thread_id");
+                //    continue; // TEMPORARILY DISABLED THROTTLING FOR DEBUG
+                // }
+
+                // If not throttled, we will send. NOW set the throttle for next 120 seconds.
+                // set_transient($recipient_throttle_key, 1, 120);
+
+                error_log("PUSH DEBUG: Sending to $recipient_id (Sender: $sender_id)");
+
+                // Safe Sender Name Retrieval
+                $sender_name = 'Użytkownik';
+                if (function_exists('bp_core_get_user_displayname')) {
+                    $sender_name = bp_core_get_user_displayname($message->sender_id);
+                } elseif (function_exists('get_the_author_meta')) {
+                    $sender_name = get_the_author_meta('display_name', $message->sender_id);
+                }
+                
+                $push_data = [
+                    'type' => 'message',
+                    'thread_id' => $thread_id,
+                    'sender_id' => $message->sender_id,
+                    '_displayInForeground' => false, 
+                    'collapse_id' => 'thread_' . $thread_id 
+                ];
+
+                // Debug context
+                // $debug_context = "[S:$sender_id R:$recipient_id]"; // REMOVED
+                
+                sk_send_push_notification(
+                    $recipient_id,
+                    'Nowa wiadomość',
+                     $sender_name . ': ' . wp_trim_words(strip_tags($message->message), 10),
+                    $push_data
+                );
+            }
+        }
+    } catch (Throwable $t) {
+        error_log("CRITICAL ERROR in sk_push_on_message_sent: " . $t->getMessage());
+    }
+}
+add_action('messages_message_sent', 'sk_push_on_message_sent');
+
+// Hook for Better Messages
+add_action('better_messages_message_sent', function($arg1 = null, $arg2 = null, $arg3 = null, $arg4 = null, $arg5 = null) {
+   try {
+       // Determine if we received the message object (new format) or individual args (old format)
+       // The error log showed 1 argument passed: BM_Messages_Message object
+       $recipients = [];
+       
+       if (is_object($arg1)) {
+           // New format: Single object passed
+           $message_object = $arg1;
+           $message_id = isset($message_object->id) ? $message_object->id : 0;
+           $thread_id  = isset($message_object->thread_id) ? $message_object->thread_id : 0;
+           $sender_id  = isset($message_object->sender_id) ? $message_object->sender_id : 0;
+           $content    = isset($message_object->message) ? $message_object->message : '';
+           
+           // Attempt to get recipients from object or fetch them
+           if (isset($message_object->recipients) && !empty($message_object->recipients)) {
+               $recipients = $message_object->recipients;
+           } else {
+               // Fallback: This might require a DB call or BP function if recipients aren't on the object
+               // For now, we'll try to get them via thread_id if possible, or skip to avoid crash
+               global $wpdb;
+               if ($thread_id) {
+                    $table_recipients = $wpdb->prefix . 'bp_messages_recipients';
+                    $recipients = $wpdb->get_col($wpdb->prepare("SELECT user_id FROM $table_recipients WHERE thread_id = %d AND user_id != %d", $thread_id, $sender_id));
+               }
+           }
+       } else {
+           // Old format: 5 arguments
+           $message_id = $arg1;
+           $thread_id = $arg2;
+           $sender_id = $arg3;
+           $recipients = $arg4;
+           $content = $arg5;
+       }
+
+       // Common Logic
+       if (empty($recipients)) return;
+       
+       // Construct a fake message object compliant with sk_push_on_message_sent expectations
+       $message = new stdClass();
+       $message->id = $message_id;
+       $message->thread_id = $thread_id;
+       $message->sender_id = $sender_id;
+       $message->message = $content;
+       $message->recipients = []; // We iterate recipients below, this property is just for structure
+       
+       // Handle different recipients formats
+       if (is_array($recipients)) {
+           foreach($recipients as $rid) {
+               $r_id = 0;
+               if (is_numeric($rid)) {
+                   $r_id = (int)$rid;
+               } elseif (is_object($rid) && isset($rid->user_id)) {
+                   $r_id = (int)$rid->user_id;
+               }
+
+               // Explicitly exclude sender from push recipients
+               if ($r_id > 0 && $r_id !== (int)$sender_id) {
+                   $r = new stdClass();
+                   $r->user_id = $r_id;
+                   $message->recipients[] = $r;
+               }
+           }
+       }
+       
+       sk_push_on_message_sent($message);
+   } catch (Throwable $t) {
+       error_log("CRITICAL ERROR in better_messages_message_sent hook: " . $t->getMessage());
+   }
+
+}, 10, 5);
+
+/**
+ * Shadow Ban: Filter Better Messages threads
+ */
+add_filter('better_messages_get_threads_args', function($args) {
+    $hidden_users = sk_get_hidden_user_ids();
+    if (!empty($hidden_users)) {
+        if (!isset($args['exclude_users'])) {
+            $args['exclude_users'] = [];
+        }
+        $args['exclude_users'] = array_merge($args['exclude_users'], $hidden_users);
+    }
+    return $args;
+});
+
+/**
+ * Handle push token update
+ */
+function sk_update_push_token_endpoint($request) {
+    $log_path = defined('WP_CONTENT_DIR') ? WP_CONTENT_DIR . '/uploads/sk_ping.txt' : (defined('ABSPATH') ? ABSPATH . 'wp-content/uploads/sk_ping.txt' : '/tmp/sk_ping.txt');
+    $log_debug = function($msg) use ($log_path) {
+        @file_put_contents($log_path, date('[H:i:s] ') . "PUSH DEBUG: $msg" . PHP_EOL, FILE_APPEND);
+    };
+
+    $token = sanitize_text_field($request['push_token'] ?: $request['token']);
+    $user_id = get_current_user_id();
+
+    if (empty($token) || (strpos($token, 'ExponentPushToken') === false && strpos($token, 'ExpoPushToken') === false)) {
+        $log_debug("Invalid token format for user $user_id: $token");
+        return new WP_Error('invalid_token', 'Invalid push token format', ['status' => 400]);
+    }
+
+    // Save token as multiple meta (one user can have multiple devices)
+    $existing_tokens = get_user_meta($user_id, 'sk_expo_push_token', false);
+    if (!in_array($token, $existing_tokens)) {
+        add_user_meta($user_id, 'sk_expo_push_token', $token);
+        $log_debug("Added new token for user $user_id. Total tokens: " . (count($existing_tokens) + 1));
+    } else {
+        $log_debug("Token already exists for user $user_id. Total tokens: " . count($existing_tokens));
+    }
+
+    return rest_ensure_response(['success' => true]);
+}
+
+/**
+ * Hook into Match event (when mutual like happens)
+ * This assumes there is an action 'sk_user_matched' triggered when a match occurs.
+ * If not, we should trigger it in the toggle_like_user function.
+ */
+function sk_push_on_match($user_id_1, $user_id_2) {
+    // Notify User 1
+    $user_2_name = bp_core_get_user_displayname($user_id_2);
+    sk_send_push_notification(
+        $user_id_1,
+        'Nowe dopasowanie! ❤️',
+        'Masz nowe dopasowanie z ' . $user_2_name . '. Napisz pierwszy!',
+        ['type' => 'match', 'user_id' => $user_id_2]
+    );
+
+    // Notify User 2
+    $user_1_name = bp_core_get_user_displayname($user_id_1);
+    sk_send_push_notification(
+        $user_id_2,
+        'Nowe dopasowanie! ❤️',
+        'Masz nowe dopasowanie z ' . $user_1_name . '. Napisz pierwszy!',
+        ['type' => 'match', 'user_id' => $user_id_1]
+    );
+}
+add_action('sk_user_matched', 'sk_push_on_match', 10, 2);
+
+/**
+ * Hook into Like event (when someone likes you, but it's not yet a match)
+ */
+function sk_push_on_like($liked_user_id, $liking_user_id) {
+    // Only send if it's NOT a match (match has its own notification)
+    $my_likes = get_user_meta($liked_user_id, 'sk_user_likes', true) ?: [];
+    if (!in_array($liking_user_id, array_map('intval', $my_likes))) {
+        sk_send_push_notification(
+            $liked_user_id,
+            'Ktoś Cię polubił! ✨',
+            'Nowa osoba zainteresowała się Twoim profilem. Sprawdź kto!',
+            ['type' => 'like', 'user_id' => $liking_user_id]
+        );
+    }
+}
+add_action('sk_user_liked', 'sk_push_on_like', 10, 2);
 
 // ============================================
 // CUSTOM REST API: Matches Endpoint
@@ -7835,6 +8794,12 @@ function sk_get_matches_endpoint($request) {
     
     // Find mutual likes (matches)
     $match_ids = array_intersect($my_likes, $liked_me);
+
+    // Shadow Ban: Filter hidden users
+    $hidden_users = sk_get_hidden_user_ids();
+    if (!empty($match_ids) && !empty($hidden_users)) {
+        $match_ids = array_diff($match_ids, $hidden_users);
+    }
     
     if (empty($match_ids)) {
         return rest_ensure_response([]);
@@ -7855,7 +8820,9 @@ function sk_get_matches_endpoint($request) {
         // Age calculation
         $age = '';
         $birth_date = isset($x_data['Data urodzenia']) ? $x_data['Data urodzenia'] : '';
-        if ($birth_date) {
+        $hide_age = get_user_meta($user_id, 'sk_hide_age', true) === '1';
+        
+        if ($birth_date && !$hide_age) {
             $age = date_diff(date_create($birth_date), date_create('today'))->y;
         }
         
@@ -7886,6 +8853,15 @@ function sk_get_matches_endpoint($request) {
         if (isset($batch_avatars[$user_id])) {
             $avatar_url = $batch_avatars[$user_id]['large'] ?: $batch_avatars[$user_id]['full'] ?: '';
         }
+        
+        // Robust check: user_avatar_id meta
+        if (!$avatar_url) {
+            $manual_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+            if ($manual_avatar_id) {
+                $avatar_url = wp_get_attachment_image_url($manual_avatar_id, 'full');
+            }
+        }
+
         if (!$avatar_url) {
             $avatar_url = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]);
         }
@@ -7895,18 +8871,25 @@ function sk_get_matches_endpoint($request) {
             'name' => $user_data->display_name,
             'login' => $user_data->user_login,
             'mention_name' => $user_data->user_nicename,
+            'avatar' => $avatar_url,
             'avatar_urls' => [
-                'full' => $avatar_url
+                'full' => $avatar_url,
+                'thumb' => $avatar_url
             ],
-            'hires_avatar' => isset($batch_avatars[$user_id]) ? $batch_avatars[$user_id] : [],
+            'hires_avatar' => [
+                'full' => $avatar_url,
+                'large' => $avatar_url,
+                'thumb' => $avatar_url
+            ],
             'age' => $age,
+            'hide_age' => $hide_age,
             'bio' => $bio ? esc_html(wp_trim_words($bio, 15, '...')) : '',
             'faith' => $faith_val,
             'politics' => $politics_val,
             'work' => $work_val,
             'diet' => $diet_val,
             'zodiac_sign' => $zodiac_val,
-            'last_activity' => isset($batch_activity[$user_id]) ? 'Aktywny/a ' . bp_core_time_since($batch_activity[$user_id]) : 'Aktywność nieznana',
+            'last_activity' => sk_format_activity_status(isset($batch_activity[$user_id]) ? $batch_activity[$user_id] : null, current_user_can('manage_options')),
             'thread_id' => intval($thread_id),
         ];
     }
@@ -7940,6 +8923,21 @@ function sk_get_liked_users_endpoint($request) {
     // Get users I liked
     $my_likes = get_user_meta($current_user_id, 'sk_user_likes', true) ?: [];
     
+    // Filter out users I blocked or who blocked me
+    $my_blocked = get_user_meta($current_user_id, 'sk_blocked_users', true) ?: [];
+    if (!empty($my_likes)) {
+        $my_likes = array_filter($my_likes, function($uid) use ($current_user_id, $my_blocked) {
+            if (in_array($uid, $my_blocked)) return false;
+            $their_blocked = get_user_meta($uid, 'sk_blocked_users', true) ?: [];
+            if (in_array($current_user_id, $their_blocked)) return false;
+            
+            // Shadow Ban
+            if (get_user_meta($uid, 'sk_is_hidden', true) === '1') return false;
+            
+            return true;
+        });
+    }
+
     if (empty($my_likes)) {
         return rest_ensure_response([]);
     }
@@ -7959,7 +8957,9 @@ function sk_get_liked_users_endpoint($request) {
         // Age calculation
         $age = '';
         $birth_date = isset($x_data['Data urodzenia']) ? $x_data['Data urodzenia'] : '';
-        if ($birth_date) {
+        $hide_age = get_user_meta($user_id, 'sk_hide_age', true) === '1';
+
+        if ($birth_date && !$hide_age) {
             $age = date_diff(date_create($birth_date), date_create('today'))->y;
         }
         
@@ -7974,6 +8974,15 @@ function sk_get_liked_users_endpoint($request) {
         if (isset($batch_avatars[$user_id])) {
             $avatar_url = $batch_avatars[$user_id]['large'] ?: $batch_avatars[$user_id]['full'] ?: '';
         }
+
+        // Robust check: user_avatar_id meta
+        if (!$avatar_url) {
+            $manual_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+            if ($manual_avatar_id) {
+                $avatar_url = wp_get_attachment_image_url($manual_avatar_id, 'full');
+            }
+        }
+
         if (!$avatar_url) {
             $avatar_url = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]);
         }
@@ -7987,20 +8996,65 @@ function sk_get_liked_users_endpoint($request) {
             ],
             'hires_avatar' => isset($batch_avatars[$user_id]) ? $batch_avatars[$user_id] : [],
             'age' => $age,
+            'hide_age' => $hide_age,
             'bio' => $bio ? esc_html(wp_trim_words($bio, 15, '...')) : '',
             'faith' => $faith_val,
             'politics' => $politics_val,
             'work' => $work_val,
             'diet' => $diet_val,
             'zodiac_sign' => $zodiac_val,
-            'last_activity' => isset($batch_activity[$user_id]) ? 'Aktywny/a ' . bp_core_time_since($batch_activity[$user_id]) : 'Aktywność nieznana',
+            'last_activity' => sk_format_activity_status(isset($batch_activity[$user_id]) ? $batch_activity[$user_id] : null, current_user_can('manage_options')),
         ];
     }
     
     return rest_ensure_response($results);
 }
+/**
+ * Get all user IDs marked as hidden (Shadow Ban)
+ */
+function sk_get_hidden_user_ids() {
+    global $wpdb;
+    $hidden_ids = $wpdb->get_col("SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key = 'sk_is_hidden' AND meta_value = '1'");
+    return array_map('intval', $hidden_ids ?: []);
+}
 
+/**
+ * Shadow Ban: Add checkbox to admin user profile
+ */
+function sk_add_shadow_ban_admin_fields($user) {
+    if (!current_user_can('manage_options')) return;
+    
+    $is_hidden = get_user_meta($user->ID, 'sk_is_hidden', true) === '1';
+    ?>
+    <h3>Shadow Ban (Antigravity)</h3>
+    <table class="form-table">
+        <tr>
+            <th><label for="sk_is_hidden">Ukryty użytkownik</label></th>
+            <td>
+                <input type="checkbox" name="sk_is_hidden" id="sk_is_hidden" value="1" <?php checked($is_hidden); ?> />
+                <span class="description">Jeśli zaznaczone, użytkownik nie będzie widoczny w wyszukiwarce, liście członków oraz nie będzie można do niego pisać.</span>
+            </td>
+        </tr>
+    </table>
+    <?php
+}
+add_action('show_user_profile', 'sk_add_shadow_ban_admin_fields');
+add_action('edit_user_profile', 'sk_add_shadow_ban_admin_fields');
 
+/**
+ * Shadow Ban: Save admin user profile field
+ */
+function sk_save_shadow_ban_admin_fields($user_id) {
+    if (!current_user_can('manage_options')) return;
+    
+    if (isset($_POST['sk_is_hidden'])) {
+        update_user_meta($user_id, 'sk_is_hidden', '1');
+    } else {
+        delete_user_meta($user_id, 'sk_is_hidden');
+    }
+}
+add_action('personal_options_update', 'sk_save_shadow_ban_admin_fields');
+add_action('edit_user_profile_update', 'sk_save_shadow_ban_admin_fields');
 
 // Custom Members Endpoint Callback
 function sk_get_members_endpoint($request) {
@@ -8034,13 +9088,66 @@ function sk_get_members_endpoint($request) {
 
     $exclude_ids = [$current_user_id, 1];
     $blocked_users = get_user_meta($current_user_id, 'sk_blocked_users', true);
-    if (is_array($blocked_users)) {
+    // Only exclude blocked users if we are NOT explicitly asking for them (e.g. via 'include' param for Skipped/Blocked list)
+    if (is_array($blocked_users) && empty($include)) {
         $exclude_ids = array_merge($exclude_ids, $blocked_users);
     }
-    $args['exclude'] = $exclude_ids;
+    
+    // Shadow Ban: Exclude hidden users
+    $hidden_users = sk_get_hidden_user_ids();
+    if (!empty($hidden_users)) {
+        $exclude_ids = array_merge($exclude_ids, $hidden_users);
+    }
+
+    $args['exclude'] = array_unique($exclude_ids);
 
     $xprofile_query = ['relation' => 'AND'];
-    $field_id_map = ['faith' => 133, 'politics' => 215, 'work' => 108, 'diet' => 334];
+
+    // --- GENDER FILTERING (Empaths Logic) ---
+    // Rule: "Wyszukaj" (Members) shows only users matching "Looking For".
+    // "Tablica" (Activity) shows everyone (handled elsewhere).
+    
+    // 1. Get current user's "Looking For" preference (Field ID 338)
+    $looking_for_raw = xprofile_get_field_data(338, $current_user_id);
+    
+    // Normalize to string (it's often an array)
+    $looking_for_str = is_array($looking_for_raw) ? implode(', ', $looking_for_raw) : (string)$looking_for_raw;
+    
+    // 2. Determine target gender
+    // If "Wszyscy" is present, we show everyone (no filter).
+    // If "Kobiety" is present (and no "Wszyscy"), we show "Kobieta".
+    // If "Mężczyźni" is present (and no "Wszyscy"), we show "Mężczyzna".
+    
+    $target_gender = null;
+    
+    if (stripos($looking_for_str, 'Wszyscy') !== false) {
+        $target_gender = null; // Show all
+    } elseif (stripos($looking_for_str, 'Kobiety') !== false) {
+        $target_gender = 'Kobieta';
+    } elseif (stripos($looking_for_str, 'Mężczyzn') !== false) { // Matches Mężczyzna, Mężczyzny, Mężczyźni
+        $target_gender = 'Mężczyzna';
+    }
+    
+    // --- DEBUG LOGGING ---
+    error_log("SK DEBUG: Member Filter - User $current_user_id looking for '$looking_for_str'. Target Gender: " . ($target_gender ?: 'ALL'));
+    // ---------------------
+
+    // 3. Apply Filter
+    if ($target_gender) {
+        $xprofile_query[] = [
+            'field'   => 129, // Gender Field ID (Empaths)
+            'value'   => $target_gender,
+            'compare' => 'LIKE' // Use LIKE to match "Kobieta" in "Kobieta" (safe)
+        ];
+    }
+    // ----------------------------------------
+    
+    // Detect if we are in Empaths (based on domain or other hints) or use prioritized IDs
+    // For now, let's use the Empaths IDs by default if they are passed, or just use both
+    $field_id_map = ['faith' => 346, 'politics' => 351, 'work' => 356, 'diet' => 362];
+    
+    // Fallback/Legacy IDs for PM
+    $legacy_field_id_map = ['faith' => 133, 'politics' => 215, 'work' => 108, 'diet' => 334];
 
     foreach ($field_id_map as $param => $id) {
         $val = $request->get_param($param);
@@ -8074,31 +9181,116 @@ function sk_get_members_endpoint($request) {
             $x_data = isset($batch_xprofile[$u_id]) ? $batch_xprofile[$u_id] : [];
             
             // Age calculation
+            $birth_date = isset($x_data[107]) ? $x_data[107] : (isset($x_data['Data urodzenia']) ? $x_data['Data urodzenia'] : '');
             $age = '';
-            $birth_date = isset($x_data['Data urodzenia']) ? $x_data['Data urodzenia'] : '';
+            $hide_age = get_user_meta($u_id, 'sk_hide_age', true) === '1';
+
             if ($birth_date) {
-                $age = date_diff(date_create($birth_date), date_create('today'))->y;
-                if ($min_age && $age < $min_age) continue;
-                if ($max_age && $age > $max_age) continue;
+                $calc_age = date_diff(date_create($birth_date), date_create('today'))->y;
+                if ($min_age && $calc_age < $min_age) continue;
+                if ($max_age && $calc_age > $max_age) continue;
+                if (!$hide_age) {
+                    $age = $calc_age;
+                }
             }
 
-            $bio = isset($x_data['O mnie']) ? $x_data['O mnie'] : '';
-            $faith_val = isset($x_data['Podejście do wiary']) ? $x_data['Podejście do wiary'] : (isset($x_data['Wiara']) ? $x_data['Wiara'] : null);
-            $politics_val = isset($x_data['Poglądy Polityczne']) ? $x_data['Poglądy Polityczne'] : null;
-            $work_val = isset($x_data['Styl Pracy']) ? $x_data['Styl Pracy'] : (isset($x_data['Styl pracy']) ? $x_data['Styl pracy'] : null);
-            $diet_val = isset($x_data['Styl jedzenia']) ? $x_data['Styl jedzenia'] : (isset($x_data['Dieta']) ? $x_data['Dieta'] : null);
-            $zodiac_val = get_zodiac_sign($birth_date);
+            $bio = isset($x_data[343]) ? $x_data[343] : (isset($x_data[367]) ? $x_data[367] : (isset($x_data['O mnie']) ? $x_data['O mnie'] : (isset($x_data['About Me']) ? $x_data['About Me'] : (isset($x_data['Introduction']) ? $x_data['Introduction'] : ''))));
+            
+            // Prioritize IDs for Empaths app with PM fallbacks and English Names
+            $faith_val = isset($x_data[346]) ? $x_data[346] : (isset($x_data[133]) ? $x_data[133] : (isset($x_data['Podejście do wiary']) ? $x_data['Podejście do wiary'] : (isset($x_data['Wiara']) ? $x_data['Wiara'] : (isset($x_data['Faith']) ? $x_data['Faith'] : (isset($x_data['Religion']) ? $x_data['Religion'] : null)))));
+            if (empty($faith_val)) $faith_val = bp_get_profile_field_data(['field' => 346, 'user_id' => $u_id]);
+            
+            $politics_val = isset($x_data[351]) ? $x_data[351] : (isset($x_data[215]) ? $x_data[215] : (isset($x_data['Poglądy Polityczne']) ? $x_data['Poglądy Polityczne'] : (isset($x_data['Politics']) ? $x_data['Politics'] : (isset($x_data['Political Views']) ? $x_data['Political Views'] : null))));
+            if (empty($politics_val)) $politics_val = bp_get_profile_field_data(['field' => 351, 'user_id' => $u_id]);
+            
+            $work_val = isset($x_data[356]) ? $x_data[356] : (isset($x_data[108]) ? $x_data[108] : (isset($x_data['Styl Pracy']) ? $x_data['Styl Pracy'] : (isset($x_data['Styl pracy']) ? $x_data['Styl pracy'] : (isset($x_data['Work']) ? $x_data['Work'] : (isset($x_data['Employment']) ? $x_data['Employment'] : null)))));
+            if (empty($work_val)) $work_val = bp_get_profile_field_data(['field' => 356, 'user_id' => $u_id]);
+            
+            $diet_val = isset($x_data[362]) ? $x_data[362] : (isset($x_data[334]) ? $x_data[334] : (isset($x_data['Styl jedzenia']) ? $x_data['Styl jedzenia'] : (isset($x_data['Dieta']) ? $x_data['Dieta'] : (isset($x_data['Diet']) ? $x_data['Diet'] : (isset($x_data['Eating Style']) ? $x_data['Eating Style'] : null)))));
+            if (empty($diet_val)) $diet_val = bp_get_profile_field_data(['field' => 362, 'user_id' => $u_id]);
+
             // DEBUG LOGGING
-            $zodiac_val = get_zodiac_sign($birth_date);
-            // DEBUG LOGGING
-             // error_log("APP SEARCH - User: $u_id, BirthDate: " . print_r($birth_date, true) . ", Zodiac: $zodiac_val");
+            if ($u_id == $current_user_id) { // Log only for the current user to avoid spam
+                error_log("sk_get_members_endpoint: User $u_id - Faith: " . print_r($faith_val, true));
+                error_log("sk_get_members_endpoint: User $u_id - Politics: " . print_r($politics_val, true));
+                error_log("sk_get_members_endpoint: User $u_id - Work: " . print_r($work_val, true));
+                error_log("sk_get_members_endpoint: User $u_id - Diet: " . print_r($diet_val, true));
+            }
+            
+            $personality_val = isset($x_data[6721]) ? $x_data[6721] : (isset($x_data['Personality']) ? $x_data['Personality'] : null);
+            $zodiac_val = isset($x_data[303]) ? $x_data[303] : get_zodiac_sign($birth_date);
+
+            $hide_age = (bool) get_user_meta($u_id, 'sk_hide_age', true);
 
             $avatar_url = '';
             if (isset($batch_avatars[$u_id])) {
                 $avatar_url = $batch_avatars[$u_id]['large'] ?: $batch_avatars[$u_id]['full'] ?: '';
             }
+            
+            // Robust check: user_avatar_id meta
+            if (!$avatar_url) {
+                $manual_avatar_id = get_user_meta($u_id, 'user_avatar_id', true);
+                if ($manual_avatar_id) {
+                    $avatar_url = wp_get_attachment_image_url($manual_avatar_id, 'full');
+                }
+            }
+
             if (!$avatar_url) {
                 $avatar_url = bp_core_fetch_avatar(['item_id' => $u_id, 'type' => 'full', 'html' => false]);
+            }
+
+            // Construct minimal mock-up of xprofile structure for mapUserProfile
+            $xprofile_mock = [
+                'groups' => [
+                    [
+                        'id' => 1,
+                        'name' => 'Details',
+                        'fields' => []
+                    ]
+                ]
+            ];
+            foreach ($x_data as $fid => $fval) {
+                if (is_numeric($fid)) {
+                    // Filter out birth date (field 107) if age is hidden
+                    if ($fid == 107 && $hide_age && $u_id != $current_user_id) {
+                        continue;
+                    }
+                    $xprofile_mock['groups'][0]['fields'][] = [
+                        'id' => $fid,
+                        'value' => ['raw' => $fval, 'rendered' => $fval]
+                    ];
+                }
+            }
+
+            // Explicitly ensure standard Empaths fields are present in the mock using the resolved values
+            // This ensures mapUserProfile finds them even if they came from fallback IDs or Names in DB
+            if ($faith_val) {
+                $xprofile_mock['groups'][0]['fields'][] = [
+                    'id' => 346, 
+                    'name' => 'Faith', 
+                    'value' => ['raw' => $faith_val, 'rendered' => $faith_val]
+                ];
+            }
+            if ($politics_val) {
+                $xprofile_mock['groups'][0]['fields'][] = [
+                    'id' => 351, 
+                    'name' => 'Politics', 
+                    'value' => ['raw' => $politics_val, 'rendered' => $politics_val]
+                ];
+            }
+            if ($work_val) {
+                $xprofile_mock['groups'][0]['fields'][] = [
+                    'id' => 356, 
+                    'name' => 'Work', 
+                    'value' => ['raw' => $work_val, 'rendered' => $work_val]
+                ];
+            }
+            if ($diet_val) {
+                $xprofile_mock['groups'][0]['fields'][] = [
+                    'id' => 362, 
+                    'name' => 'Diet', 
+                    'value' => ['raw' => $diet_val, 'rendered' => $diet_val]
+                ];
             }
 
             $results[] = [
@@ -8112,15 +9304,17 @@ function sk_get_members_endpoint($request) {
                 ],
                 'hires_avatar' => isset($batch_avatars[$u_id]) ? $batch_avatars[$u_id] : [],
                 'age' => $age,
+                'hide_age' => $hide_age,
                 'bio' => $bio ? esc_html(wp_trim_words($bio, 15, '...')) : '',
                 'faith' => $faith_val,
                 'politics' => $politics_val,
                 'work' => $work_val,
                 'diet' => $diet_val,
                 'zodiac_sign' => $zodiac_val,
-                'last_activity' => isset($batch_activity[$u_id]) ? 'Aktywny/a ' . bp_core_time_since($batch_activity[$u_id]) : 'Aktywność nieznana',
-                'numerology' => $birth_date ? sk_calculate_life_path_number($birth_date) : null,
-                'zodiac' => $birth_date ? get_zodiac_sign($birth_date) : null,
+                'last_activity' => sk_format_activity_status(isset($batch_activity[$u_id]) ? $batch_activity[$u_id] : null, current_user_can('manage_options')),
+                'numerology' => isset($x_data[6722]) ? $x_data[6722] : ($birth_date ? sk_calculate_life_path_number($birth_date) : null),
+                'zodiac' => $zodiac_val,
+                'xprofile' => $xprofile_mock
             ];
 
         }
@@ -8149,11 +9343,93 @@ add_action('rest_api_init', function () {
     register_rest_route('sk/v1', '/xprofile/update', [
         'methods' => 'POST',
         'callback' => 'sk_update_xprofile_field',
-        'permission_callback' => function() {
+        'permission_callback' => function () {
+            return is_user_logged_in();
+        }
+    ]);
+
+    // DEBUG ENDPOINT
+    register_rest_route('sk/v1', '/debug-bubbles', [
+        'methods' => 'GET',
+        'callback' => 'sk_get_debug_bubbles',
+        'permission_callback' => function () {
+            return is_user_logged_in();
+        }
+    ]);
+
+    // DEBUG ENDPOINT - Relationship Inspector
+    register_rest_route('sk/v1', '/debug-relationships', [
+        'methods' => 'GET',
+        'callback' => 'sk_debug_relationships',
+        'permission_callback' => function () {
             return is_user_logged_in();
         }
     ]);
 });
+
+function sk_debug_relationships($request) {
+    $current_user_id = get_current_user_id();
+    if (!$current_user_id) {
+        return new WP_Error('not_logged_in', 'User must be logged in', ['status' => 401]);
+    }
+
+    // Get relationship data
+    $my_likes = get_user_meta($current_user_id, 'sk_user_likes', true) ?: [];
+    $liked_by = get_user_meta($current_user_id, 'sk_liked_by_users', true) ?: [];
+    $my_blocked = get_user_meta($current_user_id, 'sk_blocked_users', true) ?: [];
+
+    // Get all subscriber users for reference
+    $all_users = get_users(['role' => 'subscriber', 'fields' => ['ID', 'display_name', 'user_email']]);
+    $user_list = [];
+    foreach ($all_users as $u) {
+        $their_blocked = get_user_meta($u->ID, 'sk_blocked_users', true) ?: [];
+        $user_list[] = [
+            'id' => (int)$u->ID,
+            'name' => $u->display_name,
+            'email' => $u->user_email,
+            'blocked_me' => in_array($current_user_id, $their_blocked),
+        ];
+    }
+
+    // BuddyPress friendship check
+    $bp_friends = [];
+    if (function_exists('friends_get_friend_user_ids')) {
+        $bp_friends = friends_get_friend_user_ids($current_user_id);
+    }
+
+    return rest_ensure_response([
+        'current_user_id' => $current_user_id,
+        'my_likes' => $my_likes,
+        'liked_by_me_count' => count($my_likes),
+        'liked_by' => $liked_by,
+        'liked_me_count' => count($liked_by),
+        'my_blocked' => $my_blocked,
+        'bp_friends' => $bp_friends,
+        'all_subscribers' => $user_list,
+    ]);
+}
+
+function sk_get_debug_bubbles() {
+    $user_id = get_current_user_id();
+    if (!$user_id) return ['error' => 'Not logged in'];
+    
+    global $wpdb;
+    $fields = [346, 351, 356, 362]; 
+    $debug = ['user_id' => $user_id];
+    
+    foreach ($fields as $fid) {
+        $raw = $wpdb->get_var($wpdb->prepare(
+            "SELECT value FROM {$wpdb->prefix}bp_xprofile_data WHERE field_id = %d AND user_id = %d", 
+            $fid, $user_id
+        ));
+        $debug[$fid] = [
+            'raw_sql' => $raw,
+            'bp_get' => xprofile_get_field_data($fid, $user_id)
+        ];
+    }
+    return $debug;
+}
+
 
 function sk_update_xprofile_field($request) {
     $user_id = get_current_user_id();
@@ -8193,6 +9469,7 @@ function sk_update_xprofile_field($request) {
  * Get single member details with xprofile
  */
 function sk_get_single_member_endpoint($request) {
+    global $wpdb;
     $user_id = $request->get_param('id');
     
     if ($user_id === 'me') {
@@ -8204,31 +9481,64 @@ function sk_get_single_member_endpoint($request) {
     if (!$user) {
         return new WP_Error('user_not_found', 'User not found', ['status' => 404]);
     }
+
+    // Shadow Ban check
+    $is_hidden = get_user_meta($user_id, 'sk_is_hidden', true) === '1';
+    $is_admin = current_user_can('manage_options');
+    if ($is_hidden && !$is_admin && $user_id != get_current_user_id()) {
+        return new WP_Error('user_not_found', 'User not found', ['status' => 404]);
+    }
     
     // Get full xprofile data using our batch helper (works for single too)
     // $batch_xprofile = sk_get_batch_xprofile_data([$user_id]);
     // $x_data = isset($batch_xprofile[$user_id]) ? $batch_xprofile[$user_id] : [];
     
-    // Get avatar
-    $avatar_full = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]);
-    $avatar_thumb = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'thumb', 'html' => false]);
+    // Get avatar - Prioritize user_avatar_id if exists (Robust V15)
+    $manual_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+    $avatar_full = false;
+    $avatar_thumb = false;
+
+    if ($manual_avatar_id) {
+        $avatar_full = wp_get_attachment_image_url($manual_avatar_id, 'full');
+        $avatar_thumb = wp_get_attachment_image_url($manual_avatar_id, 'thumbnail');
+    }
+
+    // Fallback do BuddyPress jeśli brak manualnego lub błąd pobierania URL
+    if (!$avatar_full) {
+        $avatar_full = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'full', 'html' => false]);
+    }
+    if (!$avatar_thumb) {
+        $avatar_thumb = bp_core_fetch_avatar(['item_id' => $user_id, 'type' => 'thumb', 'html' => false]);
+    }
     
     // Get last activity
     $last_activity = bp_core_get_last_activity($user_id, date("Y-m-d H:i:s"));
 
     
+
     $raw_groups = bp_xprofile_get_groups([
         'user_id' => $user_id,
         'fetch_fields' => true,
-        'fetch_field_data' => true
+        'fetch_field_data' => true,
+        'hide_empty_groups' => false,
+        'hide_empty_fields' => false
     ]);
     
+
+    $hide_age = get_user_meta($user_id, 'sk_hide_age', true) === '1';
+    $is_own_profile = (get_current_user_id() == $user_id);
+
     $clean_groups = [];
     if (!empty($raw_groups)) {
         foreach ($raw_groups as $group) {
             $clean_fields = [];
             if (!empty($group->fields) && is_array($group->fields)) {
                 foreach ($group->fields as $field) {
+                    // Filter out birth date (field 107) if age is hidden
+                    if ($field->id == 107 && $hide_age && !$is_own_profile) {
+                        continue;
+                    }
+
                     $field_value = xprofile_get_field_data($field->id, $user_id);
                     
                     if (is_array($field_value)) {
@@ -8240,11 +9550,43 @@ function sk_get_single_member_endpoint($request) {
                         continue;
                     }
 
-                    if (!empty($field_value)) {
+
+                    // Check if this is the user's own profile
+                    $is_own_profile = (get_current_user_id() == $user_id);
+                    
+                    // Include field if it has a value OR if viewing own profile
+                    if (!empty($field_value) || $is_own_profile) {
+                        $field_type = $field->type;
+                        $field_options = [];
+                        
+                        // Get options for select types
+                        if (in_array($field_type, ['selectbox', 'multiselectbox', 'radio', 'checkbox'])) {
+                            $field_obj = null;
+                            if (method_exists($field, 'get_children')) {
+                                $field_obj = $field;
+                            } else {
+                                $field_obj = new BP_XProfile_Field($field->id);
+                            }
+
+                            if ($field_obj) {
+                                $children = $field_obj->get_children();
+                                if (!empty($children)) {
+                                    foreach ($children as $child) {
+                                        $field_options[] = [
+                                            'id' => $child->id,
+                                            'name' => $child->name
+                                        ];
+                                    }
+                                }
+                            }
+                        }
+
                         $clean_fields[] = [
                             'id' => $field->id,
                             'name' => $field->name,
-                            'value' => strip_tags((string)$field_value)
+                            'value' => !empty($field_value) ? strip_tags((string)$field_value) : '',
+                            'type' => $field_type,
+                            'options' => $field_options
                         ];
                     }
                 }
@@ -8257,6 +9599,8 @@ function sk_get_single_member_endpoint($request) {
             ];
         }
     }
+    
+
     
 
     // Check for mutual match
@@ -8274,22 +9618,62 @@ function sk_get_single_member_endpoint($request) {
         }
     }
 
+    // Flatten key properties for easy access (badges, bio, etc.)
+    $flattened = [];
+    foreach ($clean_groups as $group) {
+        foreach ($group['fields'] as $field) {
+            $f_id = (int)$field['id'];
+            $f_name = (string)$field['name'];
+            $f_val = $field['value'];
+
+            // Map by IDs and Names for robustness
+            if ($f_id == 346 || $f_id == 133 || stripos($f_name, 'wiara') !== false || stripos($f_name, 'faith') !== false) $flattened['faith'] = $f_val;
+            if ($f_id == 351 || $f_id == 215 || stripos($f_name, 'polityka') !== false || stripos($f_name, 'politics') !== false) $flattened['politics'] = $f_val;
+            if ($f_id == 356 || $f_id == 108 || stripos($f_name, 'praca') !== false || stripos($f_name, 'work') !== false) $flattened['work'] = $f_val;
+            if ($f_id == 362 || $f_id == 334 || stripos($f_name, 'diet') !== false || stripos($f_name, 'jedzeni') !== false) $flattened['diet'] = $f_val;
+            if ($f_id == 303 || stripos($f_name, 'zodiak') !== false || stripos($f_name, 'zodiac') !== false) $flattened['zodiac_sign'] = $f_val;
+            if ($f_id == 343 || $f_id == 367 || stripos($f_name, 'o mnie') !== false || stripos($f_name, 'bio') !== false) $flattened['bio'] = $f_val;
+            
+            // Age calculation if field 107 is found
+            if ($f_id == 107) {
+                if (!$hide_age || $is_own_profile) {
+                    $flattened['age'] = date_diff(date_create($f_val), date_create('today'))->y;
+                } else {
+                    $flattened['age'] = '';
+                }
+            }
+        }
+    }
+
     // Simplify the response
-    return rest_ensure_response([
+    return rest_ensure_response(array_merge($flattened, [
         'id' => $user->ID,
         'name' => $user->display_name,
+        'hide_age' => $hide_age,
         'user_login' => $user->user_login,
+        'roles' => $user->roles,
         'link' => bp_core_get_user_domain($user_id),
+        'avatar' => $avatar_full,
         'avatar_urls' => [
             'full' => $avatar_full,
+            'thumb' => $avatar_thumb
+        ],
+        'hires_avatar' => [
+            'full' => $avatar_full,
+            'large' => $avatar_full,
             'thumb' => $avatar_thumb
         ],
         'xprofile' => [
             'groups' => $clean_groups
         ],
-        'last_activity' => $last_activity,
+        'last_activity' => sk_format_activity_status($last_activity, current_user_can('manage_options')),
         'onboarding_complete' => (bool) get_user_meta($user_id, 'app_onboarding_complete', true),
         'is_matched' => $is_matched,
+        'chat_allowed_by_me' => (function($current_user_id, $target_user_id) {
+            if (!$current_user_id) return false;
+            $allowed_ids = get_user_meta($current_user_id, 'sk_allowed_chat_ids', true) ?: [];
+            return is_array($allowed_ids) && in_array((int)$target_user_id, array_map('intval', $allowed_ids));
+        })(get_current_user_id(), $user_id),
         'gallery' => (function($user_id) {
             $photo_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
             if (!is_array($photo_ids)) return [];
@@ -8311,7 +9695,43 @@ function sk_get_single_member_endpoint($request) {
             }
             return $gallery;
         })($user_id),
-        // Add flattened fields for convenience if needed later, but frontend uses groups structure
+        'unread_notifications_count' => (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM " . (isset(buddypress()->notifications->table_name) ? buddypress()->notifications->table_name : $wpdb->prefix . 'bp_notifications') . " WHERE user_id = %d AND is_new = 1",
+            $user_id
+        ))
+    ]));
+}
+
+/**
+ * Update user preference (meta)
+ */
+function sk_update_preference_endpoint($request) {
+    $user_id = get_current_user_id();
+    $key = $request->get_param('key');
+    $value = $request->get_param('value');
+
+    if (empty($key)) {
+        return new WP_Error('missing_key', 'Missing preference key', ['status' => 400]);
+    }
+
+    // List of allowed keys to prevent arbitrary meta updates
+    $allowed_keys = ['sk_hide_age'];
+    if (!in_array($key, $allowed_keys)) {
+        return new WP_Error('invalid_key', 'Invalid preference key', ['status' => 400]);
+    }
+
+    // sanitize value
+    $final_value = $value;
+    if ($key === 'sk_hide_age') {
+        $final_value = filter_var($value, FILTER_VALIDATE_BOOLEAN) ? '1' : '0';
+    }
+
+    update_user_meta($user_id, $key, $final_value);
+
+    return rest_ensure_response([
+        'success' => true,
+        'key' => $key,
+        'value' => $final_value === '1'
     ]);
 }
 
@@ -8328,6 +9748,21 @@ function sk_get_likes_me_endpoint($request) {
     // Get users who liked me
     $liked_me = get_user_meta($current_user_id, 'sk_liked_by_users', true) ?: [];
     
+    // Filter out users I blocked or who blocked me
+    $my_blocked = get_user_meta($current_user_id, 'sk_blocked_users', true) ?: [];
+    if (!empty($liked_me)) {
+        $liked_me = array_filter($liked_me, function($uid) use ($current_user_id, $my_blocked) {
+            if (in_array($uid, $my_blocked)) return false;
+            $their_blocked = get_user_meta($uid, 'sk_blocked_users', true) ?: [];
+            if (in_array($current_user_id, $their_blocked)) return false;
+            
+            // Shadow Ban
+            if (get_user_meta($uid, 'sk_is_hidden', true) === '1') return false;
+            
+            return true;
+        });
+    }
+
     if (empty($liked_me)) {
         return rest_ensure_response([]);
     }
@@ -8347,7 +9782,9 @@ function sk_get_likes_me_endpoint($request) {
         // Age calculation
         $age = '';
         $birth_date = isset($x_data['Data urodzenia']) ? $x_data['Data urodzenia'] : '';
-        if ($birth_date) {
+        $hide_age = get_user_meta($user_id, 'sk_hide_age', true) === '1';
+
+        if ($birth_date && !$hide_age) {
             $age = date_diff(date_create($birth_date), date_create('today'))->y;
         }
         
@@ -8375,13 +9812,14 @@ function sk_get_likes_me_endpoint($request) {
             ],
             'hires_avatar' => isset($batch_avatars[$user_id]) ? $batch_avatars[$user_id] : [],
             'age' => $age,
+            'hide_age' => $hide_age,
             'bio' => $bio ? esc_html(wp_trim_words($bio, 15, '...')) : '',
             'faith' => $faith_val,
             'politics' => $politics_val,
             'work' => $work_val,
             'diet' => $diet_val,
             'zodiac_sign' => $zodiac_val,
-            'last_activity' => isset($batch_activity[$user_id]) ? 'Aktywny/a ' . bp_core_time_since($batch_activity[$user_id]) : 'Aktywność nieznana',
+            'last_activity' => sk_format_activity_status(isset($batch_activity[$user_id]) ? $batch_activity[$user_id] : null, current_user_can('manage_options')),
         ];
     }
     
@@ -8400,10 +9838,32 @@ add_action('rest_api_init', function () {
         }
     ]);
 
+    // GET Blocked Users List (for mobile sync)
+    register_rest_route('sk/v1', '/blocked', [
+        'methods' => 'GET',
+        'callback' => function() {
+            $current_user_id = get_current_user_id();
+            $blocked = get_user_meta($current_user_id, 'sk_blocked_users', true) ?: [];
+            return rest_ensure_response(array_map('intval', $blocked));
+        },
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+
     // BLOCK User Endpoint
     register_rest_route('sk/v1', '/block', [
         'methods' => 'POST',
         'callback' => 'sk_block_user_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+
+    // ALLOW CHAT Endpoint (for women to allow men)
+    register_rest_route('sk/v1', '/allow-chat', [
+        'methods' => 'POST',
+        'callback' => 'sk_allow_chat_endpoint',
         'permission_callback' => function() {
             return is_user_logged_in();
         }
@@ -8458,10 +9918,231 @@ function sk_block_user_endpoint($request) {
     
     update_user_meta($current_user_id, 'sk_blocked_users', $blocked_users);
 
+    // AUTO-REMOVE LIKES if blocking
+    if ($new_status === 'blocked') {
+        // Remove from my likes
+        $my_likes = get_user_meta($current_user_id, 'sk_user_likes', true) ?: [];
+        $my_likes = array_diff($my_likes, [$target_user_id]);
+        update_user_meta($current_user_id, 'sk_user_likes', array_values($my_likes));
+        
+        // Remove from their liked_by
+        $their_liked_by = get_user_meta($target_user_id, 'sk_liked_by_users', true) ?: [];
+        $their_liked_by = array_diff($their_liked_by, [$current_user_id]);
+        update_user_meta($target_user_id, 'sk_liked_by_users', array_values($their_liked_by));
+
+        // Remove from their likes
+        $their_likes = get_user_meta($target_user_id, 'sk_user_likes', true) ?: [];
+        $their_likes = array_diff($their_likes, [$current_user_id]);
+        update_user_meta($target_user_id, 'sk_user_likes', array_values($their_likes));
+
+        // Remove from my liked_by
+        $my_liked_by = get_user_meta($current_user_id, 'sk_liked_by_users', true) ?: [];
+        $my_liked_by = array_diff($my_liked_by, [$target_user_id]);
+        update_user_meta($current_user_id, 'sk_liked_by_users', array_values($my_liked_by));
+
+        // Remove friendship
+        if (function_exists('friends_remove_friend')) {
+            friends_remove_friend($current_user_id, $target_user_id);
+        }
+
+        // Block in Better Messages if active
+        if (class_exists('Better_Messages') && function_exists('Better_Messages')) {
+            $bm = Better_Messages();
+            if (isset($bm->functions) && method_exists($bm->functions, 'block_user')) {
+                $bm->functions->block_user($current_user_id, $target_user_id);
+            }
+        }
+    } else if ($new_status === 'unblocked') {
+        // Unblock in Better Messages if active
+        if (class_exists('Better_Messages') && function_exists('Better_Messages')) {
+            $bm = Better_Messages();
+            if (isset($bm->functions) && method_exists($bm->functions, 'unblock_user')) {
+                $bm->functions->unblock_user($current_user_id, $target_user_id);
+            }
+        }
+    }
+
     return rest_ensure_response([
         'status' => $new_status,
         'blocked_users' => $blocked_users // returning list for sync if needed
     ]);
+}
+
+/**
+ * Allow chat endpoint (women allowing men)
+ */
+function sk_allow_chat_endpoint($request) {
+    try {
+        // 1. Safe User ID Retrieval
+        $current_user_id = 0;
+        if (function_exists('bp_loggedin_user_id')) {
+            $current_user_id = bp_loggedin_user_id();
+        }
+        if (!$current_user_id && function_exists('get_current_user_id')) {
+            $current_user_id = get_current_user_id();
+        }
+        
+        if (!$current_user_id) {
+            return new WP_Error('not_logged_in', 'User must be logged in', ['status' => 401]);
+        }
+
+        // 2. Premium Check
+        if (!sk_is_premium_user($current_user_id)) {
+            return new WP_Error('not_premium', 'Funkcja "Pozwól na rozmowę" jest dostępna tylko dla użytkowników Premium', ['status' => 403]);
+        }
+
+        $target_user_id = intval($request->get_param('user_id'));
+        $action = $request->get_param('action') ?: 'allow';
+        
+        // Debug log (Safe logging)
+        error_log("sk_allow_chat_endpoint: User $current_user_id -> Target $target_user_id. Action: $action");
+        
+        if (!$target_user_id) {
+            return new WP_Error('invalid_user', 'Invalid user ID', ['status' => 400]);
+        }
+
+        $allowed_ids = get_user_meta($current_user_id, 'sk_allowed_chat_ids', true) ?: [];
+        if (!is_array($allowed_ids)) $allowed_ids = [];
+
+        // REVOKE LOGIC
+        if ($action === 'revoke') {
+            if (($key = array_search($target_user_id, $allowed_ids)) !== false) {
+                unset($allowed_ids[$key]);
+                update_user_meta($current_user_id, 'sk_allowed_chat_ids', array_values($allowed_ids));
+            }
+
+            // Delete created thread (subject: 'Prawdziwa Miłość')
+            global $wpdb;
+            
+            // Ensure BuddyPress components are loaded
+            if (function_exists('buddypress') && isset(buddypress()->messages->table_name_messages)) {
+                $bp = buddypress();
+                $table_messages = $bp->messages->table_name_messages;
+                $table_recipients = $bp->messages->table_name_recipients;
+
+                $sql = $wpdb->prepare("
+                    SELECT m.thread_id 
+                    FROM {$table_messages} m
+                    JOIN {$table_recipients} r ON m.thread_id = r.thread_id
+                    WHERE m.sender_id = %d 
+                    AND m.subject = 'Prawdziwa Miłość'
+                    AND m.message LIKE '%%Użytkownik pozwala Ci ze sobą porozmawiać%%'
+                    AND r.user_id = %d
+                    LIMIT 1
+                ", $current_user_id, $target_user_id);
+                
+                $thread_id = $wpdb->get_var($sql);
+                
+                if ($thread_id && function_exists('messages_delete_thread')) {
+                    messages_delete_thread($thread_id);
+                }
+            }
+
+            return rest_ensure_response([
+                 'success' => true,
+                 'chat_allowed' => false,
+                 'revoked' => true
+            ]);
+        }
+
+        // ALLOW LOGIC
+        $force = $request->get_param('force');
+
+        if (!in_array($target_user_id, $allowed_ids) || $force) {
+            if (!in_array($target_user_id, $allowed_ids)) {
+                $allowed_ids[] = $target_user_id;
+                update_user_meta($current_user_id, 'sk_allowed_chat_ids', array_values($allowed_ids));
+            }
+            
+            // Send notification message
+            $bm_sent_id = 0;
+            $bp_fallback_id = 0;
+            $sync_result = 'none';
+
+            // 1. Try Better Messages FIRST
+            if (class_exists('Better_Messages') && function_exists('Better_Messages')) {
+                $bm = Better_Messages();
+                if ($bm && isset($bm->functions) && method_exists($bm->functions, 'new_message')) {
+                    $bm_args = [
+                        'sender_id' => $current_user_id,
+                        'recipients' => [$target_user_id],
+                        'content' => 'Użytkownik pozwala Ci ze sobą porozmawiać.',
+                        'subject' => 'Prawdziwa Miłość',
+                        'return_thread_id' => true
+                    ];
+                    
+                    try {
+                         $bm_sent_id = $bm->functions->new_message($bm_args);
+                    } catch (Throwable $t) {
+                        error_log("sk_allow_chat_endpoint: BM Throwable: " . $t->getMessage());
+                    } catch (Exception $e) {
+                        error_log("sk_allow_chat_endpoint: BM Exception: " . $e->getMessage());
+                    }
+                    
+                    if ($bm_sent_id) {
+                        error_log("sk_allow_chat_endpoint: Sent via Better_Messages. ID: " . (is_scalar($bm_sent_id) ? $bm_sent_id : 'Object/Array'));
+                    }
+                }
+            }
+
+            // 2. Fallback to BuddyPress Core
+            if (!$bm_sent_id && function_exists('messages_new_message')) {
+                $date_sent = function_exists('bp_core_current_time') ? bp_core_current_time() : current_time('mysql');
+                
+                try {
+                    $bp_fallback_id = messages_new_message([
+                        'sender_id' => $current_user_id,
+                        'recipients' => [$target_user_id],
+                        'subject' => 'Prawdziwa Miłość',
+                        'content' => 'Użytkownik pozwala Ci ze sobą porozmawiać.',
+                        'date_sent' => $date_sent
+                    ]);
+                } catch (Throwable $t) {
+                    error_log("sk_allow_chat_endpoint: BP Throwable: " . $t->getMessage());
+                } catch (Exception $e) {
+                    error_log("sk_allow_chat_endpoint: BP Exception: " . $e->getMessage());
+                }
+
+                if ($bp_fallback_id) {
+                    error_log("sk_allow_chat_endpoint: Sent via BP Native. ID: $bp_fallback_id");
+                    
+                    // Sync to BM if needed
+                    if (class_exists('Better_Messages') && function_exists('Better_Messages')) {
+                        $bm = Better_Messages();
+                        if ($bm && isset($bm->functions) && method_exists($bm->functions, 'restoring_thread')) {
+                            try {
+                                $bm->functions->restoring_thread($bp_fallback_id);
+                                $sync_result = 'restored_thread_' . $bp_fallback_id;
+                            } catch (Throwable $t) {
+                                error_log("sk_allow_chat_endpoint: BM Sync Throwable: " . $t->getMessage());
+                            }
+                        }
+                        
+                        // Action hook with safe object
+                        if ($bp_fallback_id) {
+                            do_action('messages_message_sent', (object)['id' => $bp_fallback_id, 'thread_id' => $bp_fallback_id]);
+                        }
+                    }
+                }
+            }
+        }
+
+        return rest_ensure_response([
+            'success' => true,
+            'chat_allowed' => true,
+            'received_action' => $action, 
+            'debug_bm_id' => is_scalar($bm_sent_id) ? $bm_sent_id : 'complex',
+            'debug_bp_id' => $bp_fallback_id,
+            'sync_result' => $sync_result
+        ]);
+
+    } catch (Throwable $t) {
+        error_log("CRITICAL FATAL in sk_allow_chat_endpoint: " . $t->getMessage() . " in " . $t->getFile() . ":" . $t->getLine());
+        return new WP_Error('internal_error', 'Błąd krytyczny: ' . $t->getMessage(), ['status' => 500]);
+    } catch (Exception $e) {
+        error_log("CRITICAL EXCEPTION in sk_allow_chat_endpoint: " . $e->getMessage());
+        return new WP_Error('internal_error', 'Wystąpił nieoczekiwany błąd.', ['status' => 500]);
+    }
 }
 
 /**
@@ -8481,17 +10162,12 @@ function sk_toggle_like_endpoint($request) {
         return new WP_Error('invalid_user_id', 'Invalid user ID', ['status' => 400]);
     }
 
-    // SAFETY CHECK: Blocking
-    // 1. Did I block this user?
+    // Safety check will be performed later specifically for "Like" action
     $my_blocked = get_user_meta($liker_id, 'sk_blocked_users', true) ?: [];
-    if (is_array($my_blocked) && in_array($liked_id, $my_blocked)) {
-        return new WP_Error('user_blocked', 'You have blocked this user', ['status' => 403]);
-    }
-    // 2. Did this user block me?
+    $is_i_blocked = is_array($my_blocked) && in_array($liked_id, $my_blocked);
+
     $their_blocked = get_user_meta($liked_id, 'sk_blocked_users', true) ?: [];
-    if (is_array($their_blocked) && in_array($liker_id, $their_blocked)) {
-        return new WP_Error('user_blocked_you', 'Action not allowed', ['status' => 403]);
-    }
+    $is_they_blocked = is_array($their_blocked) && in_array($liker_id, $their_blocked);
     
     // Get current likes - ensure all values are integers
     $my_likes = get_user_meta($liker_id, 'sk_user_likes', true) ?: [];
@@ -8517,7 +10193,7 @@ function sk_toggle_like_endpoint($request) {
     error_log("is_already_liked: " . ($is_already_liked ? 'YES' : 'NO'));
     
     if ($is_already_liked) {
-        // UNLIKE
+        // UNLIKE is always allowed even if blocked (to fix stuck state)
         $my_likes = array_diff($my_likes, [$liked_id]);
         $liked_by = array_diff($liked_by, [$liker_id]);
         
@@ -8528,6 +10204,14 @@ function sk_toggle_like_endpoint($request) {
         
         $new_status = 'unliked';
     } else {
+        // LIKE is only allowed if no block exists
+        if ($is_i_blocked) {
+            return new WP_Error('user_blocked', 'You have blocked this user', ['status' => 403]);
+        }
+        if ($is_they_blocked) {
+            return new WP_Error('user_blocked_you', 'Action not allowed', ['status' => 403]);
+        }
+
         // LIKE
         $my_likes[] = $liked_id;
         $liked_by[] = $liker_id;
@@ -8568,7 +10252,298 @@ add_action('rest_api_init', function () {
             return is_user_logged_in();
         }
     ]);
+
+    register_rest_route('sk/v1', '/thread/(?P<id>\d+)/read', [
+        'methods' => 'POST',
+        'callback' => 'sk_mark_thread_read_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
 });
+
+function sk_get_unread_count_endpoint($request = null, $skip_reset = false) {
+    global $wpdb;
+    $table_recipients = $wpdb->prefix . 'bp_messages_recipients';
+    $table_messages = $wpdb->prefix . 'bp_messages_messages';
+    
+    // Support being called as $request object OR manual ID
+    $user_id = 0;
+    if (is_numeric($request)) {
+        $user_id = (int)$request;
+    } elseif (is_object($request) && method_exists($request, 'get_param')) {
+        $user_id = get_current_user_id();
+    } else {
+        $user_id = get_current_user_id();
+    }
+
+    $log_file = dirname(__FILE__) . '/sk_push.log';
+    $log_debug = function($msg) use ($log_file) {
+        $ts = date('Y-m-d H:i:s');
+        @file_put_contents($log_file, "[$ts] $msg" . PHP_EOL, FILE_APPEND);
+    };
+
+    if (!$user_id) {
+        $log_debug("FAILURE: Unauthenticated call");
+        return rest_ensure_response(['unread_count' => 0, 'unread_thread_ids' => [], 'status' => 'unauthenticated']);
+    }
+    
+    $log_debug("ENTERED: User $user_id (Manual: " . ($manual_user_id ?: 'NO') . ")");
+
+    try {
+        $clear_all = (is_object($request) && method_exists($request, 'get_param') && $request->get_param('clear') === 'true');
+        
+        $table_recipients = $wpdb->prefix . 'bp_messages_recipients';
+        $table_messages = $wpdb->prefix . 'bp_messages_messages';
+        
+        // 0. Forced Clear All Logic
+        if ($clear_all) {
+            $wpdb->update($table_recipients, ['unread_count' => 0], ['user_id' => $user_id]);
+            bp_update_user_meta($user_id, 'bp_messages_unread_count', 0);
+            delete_user_meta($user_id, 'sk_alerted_threads'); // RESET ALL PUSH ALERTS
+            
+            if (class_exists('Better_Messages') && function_exists('Better_Messages')) {
+                try {
+                    $bm = Better_Messages();
+                    if ($bm && isset($bm->functions) && method_exists($bm->functions, 'mark_all_as_read')) {
+                        $bm->functions->mark_all_as_read($user_id);
+                    }
+                } catch (Throwable $t) { /* ignore secondary error */ }
+            }
+        }
+
+        // 1. Get raw unread thread IDs from BP table
+        $unread_thread_ids = $wpdb->get_col($wpdb->prepare("
+            SELECT DISTINCT thread_id FROM {$table_recipients}
+            WHERE user_id = %d AND unread_count > 0 AND is_deleted = 0
+        ", $user_id));
+        
+        $unread_thread_ids = array_map('intval', (array)$unread_thread_ids);
+
+        // 1b. Get Better Messages unread thread IDs (New Fix for Flicker)
+        $bm_unread_ids = [];
+        $bm_table_recipients = $wpdb->prefix . 'bm_message_recipients';
+        if ($wpdb->get_var("SHOW TABLES LIKE '$bm_table_recipients'") == $bm_table_recipients) {
+            $bm_unread_ids = $wpdb->get_col($wpdb->prepare("
+                SELECT DISTINCT thread_id FROM {$bm_table_recipients}
+                WHERE user_id = %d AND unread > 0
+            ", $user_id));
+            $bm_unread_ids = array_map('intval', (array)$bm_unread_ids);
+            $log_debug("BM Unread IDs found: " . implode(',', $bm_unread_ids));
+        }
+
+        // Merge and unique
+        $merged_ids = array_unique(array_merge($unread_thread_ids, $bm_unread_ids));
+        
+        // 2. Verified Count
+        $verified_unread_ids = array_values($merged_ids); // reset keys
+        $db_count = count($verified_unread_ids);
+
+        $log_debug("IDs Sync: BP(" . count($unread_thread_ids) . ") BM(" . count($bm_unread_ids) . ") TOTAL UNIQUE(" . $db_count . ")");
+
+        // 3. Get standard BP unread count
+        $bp_count = 0;
+        if (function_exists('messages_get_unread_count')) {
+            $bp_count = messages_get_unread_count($user_id);
+            $log_debug("BP messages_get_unread_count: $bp_count");
+        }
+        
+        // 4. Get Better Messages total unread count (Fallback)
+        $bm_count = 0;
+        if (class_exists('Better_Messages') && function_exists('Better_Messages')) {
+            try {
+                $bm = Better_Messages();
+                if ($bm && isset($bm->functions)) {
+                    if (method_exists($bm->functions, 'get_unread_threads_count')) {
+                        $bm_count = $bm->functions->get_unread_threads_count($user_id);
+                        $log_debug("BM get_unread_threads_count for user $user_id: $bm_count");
+                    }
+                }
+            } catch (Throwable $t) {
+                $log_debug("BM Fallback Error: " . $t->getMessage());
+            }
+        }
+        
+        // --- FINAL COUNT (Trust the MAX of all sources) ---
+        // If BuddyPress says there are unread messages, we MUST show at least 1 thread.
+        $safe_bp_thread_count = ($bp_count > 0) ? 1 : 0;
+        
+        $final_count = max((int)$db_count, (int)$bm_count, (int)$safe_bp_thread_count);
+        $log_debug("FINAL RESULT: $final_count (DB Thread:$db_count, BM Thread:$bm_count, BP Total Msg:$bp_count)");
+
+        // Alert Reset Logic (Per-Thread) - ONLY CRITICAL CLEANUP
+        if (!$skip_reset) {
+            $alerted_threads = get_user_meta($user_id, 'sk_alerted_threads', true);
+            if (is_array($alerted_threads) && !empty($alerted_threads)) {
+                if ($final_count === 0) {
+                    // Fully read? Clear all alerts definitely.
+                    delete_user_meta($user_id, 'sk_alerted_threads');
+                    $log_debug("UNREAD [$user_id]: Cleared ALL alerts (Total 0).");
+                }
+            }
+        } else {
+            $log_debug("UNREAD [$user_id]: Internal call, no reset.");
+        }
+
+        // Clean up legacy flag if exists
+        delete_user_meta($user_id, 'sk_push_alerted');
+
+        if ($final_count > 0) {
+            update_user_meta($user_id, '_bm_unread_count', $final_count);
+            bp_update_user_meta($user_id, 'bp_messages_unread_count', $final_count);
+        }
+        
+        return rest_ensure_response([
+            'unread_count' => (int) $final_count,
+            'details' => [
+                'bp_msg_count' => (int) $bp_count,
+                'bm_thread_count' => (int) $bm_count,
+                'db_thread_count' => (int) $db_count,
+            ],
+            'unread_thread_ids' => $verified_unread_ids,
+            'status' => 'success'
+        ]);
+    } catch (Throwable $t) {
+        $log_debug("CRITICAL ERROR: " . $t->getMessage() . " in " . $t->getFile() . ":" . $t->getLine());
+        return rest_ensure_response(['unread_count' => 0, 'error' => $t->getMessage()]);
+    }
+}
+
+function sk_mark_thread_read_endpoint($request) {
+    $thread_id = intval($request->get_param('id'));
+    $user_id = get_current_user_id();
+
+    if (!$thread_id) {
+        return new WP_Error('missing_param', 'Thread ID is required', ['status' => 400]);
+    }
+
+    $results = [
+        'bp_marked' => false,
+        'bm_marked' => false,
+        'db_updated' => false
+    ];
+
+    try {
+        // 1. Mark as read in BuddyPress via standard function
+        if (function_exists('messages_mark_thread_read')) {
+            messages_mark_thread_read($thread_id);
+            $results['bp_marked'] = true;
+        }
+
+        // 2. Clear BuddyPress notifications for this thread
+        if (function_exists('bp_notifications_mark_notifications_by_item_id')) {
+            bp_notifications_mark_notifications_by_item_id($user_id, $thread_id, 'messages', 'new_message');
+            $results['notifications_cleared'] = true;
+        }
+
+        // Reset alerted flag for this specific thread
+        $alerted = get_user_meta($user_id, 'sk_alerted_threads', true);
+        if (is_array($alerted)) {
+            $new_alerted = array_diff(array_map('intval', $alerted), [(int)$thread_id]);
+            if (count($new_alerted) !== count($alerted)) {
+                update_user_meta($user_id, 'sk_alerted_threads', array_values($new_alerted));
+                error_log("MARK READ [$user_id]: Cleared alert for thread $thread_id");
+            }
+        }
+        delete_user_meta($user_id, 'sk_push_alerted');
+
+        // 3. Direct DB update for BuddyPress (insurance)
+        global $wpdb;
+        $table_recipients = $wpdb->prefix . 'bp_messages_recipients';
+        $updated = $wpdb->update(
+            $table_recipients,
+            ['unread_count' => 0],
+            ['thread_id' => $thread_id, 'user_id' => $user_id],
+            ['%d'],
+            ['%d', '%d']
+        );
+        if ($updated !== false) {
+            $results['db_updated'] = true;
+        }
+
+        // 4. Mark as read in Better Messages
+        if (class_exists('Better_Messages') && function_exists('Better_Messages')) {
+            $bm = Better_Messages();
+            if (isset($bm->functions)) {
+                $log_file = dirname(__FILE__) . '/sk_push.log';
+                $log_bm = function($msg) use ($log_file) {
+                    $ts = date('Y-m-d H:i:s');
+                    @file_put_contents($log_file, "[$ts] BM SYNC: $msg" . PHP_EOL, FILE_APPEND);
+                };
+
+                // Try multiple possible methods depending on version
+                if (method_exists($bm->functions, 'mark_as_read')) {
+                    $bm->functions->mark_as_read($thread_id, $user_id);
+                    $results['bm_marked_v1'] = true;
+                    $log_bm("Used mark_as_read for Thread $thread_id User $user_id");
+                }
+                
+                if (method_exists($bm->functions, 'mark_thread_as_read')) {
+                    $bm->functions->mark_thread_as_read($thread_id, $user_id);
+                    $results['bm_marked_v2'] = true;
+                    $log_bm("Used mark_thread_as_read for Thread $thread_id User $user_id");
+                }
+
+                // Force update unread count for user
+                if (method_exists($bm->functions, 'update_unread_count')) {
+                    $bm->functions->update_unread_count($user_id);
+                    $results['bm_count_updated'] = true;
+                    $log_bm("Force updated unread count for User $user_id");
+                }
+            }
+        }
+
+        // 4.5 Manual DB Insurance for Better Messages
+        $bm_table = $wpdb->prefix . 'bm_message_recipients';
+        if ($wpdb->get_var("SHOW TABLES LIKE '$bm_table'") == $bm_table) {
+            $bm_updated = $wpdb->update(
+                $bm_table,
+                ['unread' => 0],
+                ['thread_id' => $thread_id, 'user_id' => $user_id],
+                ['%d'],
+                ['%d', '%d']
+            );
+            if ($bm_updated !== false) {
+                $results['bm_db_updated'] = true;
+            }
+        }
+        
+        // 5. Force recalculate and clear cache (BuddyPress)
+            // 5. Force recalculate and clear cache (BuddyPress)
+            if (function_exists('messages_get_unread_count')) {
+                
+                // CRITICAL FIX: Better Messages might have its own table that reverts the meta.
+                // We perform a "Scorched Earth" update on any table that looks like a message recipient table.
+                // WE DO THIS BEFORE FETCHING THE COUNT to ensure we get the fresh 0.
+                global $wpdb;
+                $potential_tables = $wpdb->get_col("SHOW TABLES LIKE '%message%recipient%'");
+                foreach ($potential_tables as $table) {
+                    $wpdb->query($wpdb->prepare(
+                        "UPDATE {$table} SET unread_count = 0 WHERE user_id = %d AND thread_id = %d",
+                        $user_id, $thread_id
+                    ));
+                }
+                
+                // Clear cache BEFORE fetching new count
+                wp_cache_delete($user_id, 'bp_messages_unread_count');
+
+                // Now fetch the true count (should be 0 for this thread)
+                $new_count = messages_get_unread_count($user_id);
+                
+                update_user_meta($user_id, '_bp_messages_unread_count', $new_count);
+                // Also update Better Messages meta if it exists
+                update_user_meta($user_id, '_bm_unread_count', $new_count); 
+                
+                $results['new_count'] = $new_count;
+            }
+
+    } catch (Exception $e) {
+        error_log('Mark Read Error (Exception): ' . $e->getMessage());
+        return new WP_Error('server_error', 'Exception: ' . $e->getMessage(), ['status' => 500]);
+    } catch (Throwable $t) {
+        return new WP_Error('internal_error', $t->getMessage(), ['status' => 500]);
+    }
+}
 
 function sk_delete_thread_endpoint($request) {
     $thread_id = intval($request->get_param('id'));
@@ -8717,6 +10692,10 @@ function sk_activate_user($request) {
     $activation_key = sanitize_text_field($request->get_param('key'));
     $user_login = sanitize_user($request->get_param('user'));
     
+    error_log("SK API: /activate called for user: $user_login with key: $activation_key");
+    $sk_log = WP_CONTENT_DIR . '/uploads/temp-avatars/sk_debug.log';
+    file_put_contents($sk_log, "SK API: /activate called for user: $user_login with key: $activation_key\n", FILE_APPEND);
+
     if (empty($activation_key) || empty($user_login)) {
         return new WP_Error('missing_params', 'Brak klucza aktywacyjnego lub nazwy użytkownika', ['status' => 400]);
     }
@@ -8724,14 +10703,21 @@ function sk_activate_user($request) {
     $activate = bp_core_activate_signup($activation_key);
     
     if (is_wp_error($activate)) {
+        error_log("SK Activation ERROR: bp_core_activate_signup failed: " . $activate->get_error_message());
+        $sk_log = WP_CONTENT_DIR . '/uploads/temp-avatars/sk_debug.log';
+        file_put_contents($sk_log, "SK ERROR: bp_core_activate_signup failed: " . $activate->get_error_message() . "\n", FILE_APPEND);
         return new WP_Error('activation_failed', $activate->get_error_message(), ['status' => 400]);
     }
     
+    error_log("SK Activation SUCCESS: Account activated for user_id: " . $activate['user_id']);
+    $sk_log = WP_CONTENT_DIR . '/uploads/temp-avatars/sk_debug.log';
+    file_put_contents($sk_log, "SK SUCCESS: Account activated for user_id: " . $activate['user_id'] . "\n", FILE_APPEND);
+
     return rest_ensure_response([
         'success' => true,
         'message' => 'Konto zostało aktywowane pomyślnie!',
         'user_id' => $activate['user_id'],
-        'username' => $activate['user_login'],
+        'user_login' => $activate['user_login'],
     ]);
 }
 
@@ -8758,6 +10744,16 @@ add_action('rest_api_init', function () {
 
 function sk_update_onboarding($request) {
     $user_id = get_current_user_id();
+
+    // --- DEBUG LOGGING to sk_debug.log ---
+    $log_entry = "SK DEBUG [" . date('Y-m-d H:i:s') . "]: sk_update_onboarding called.\n";
+    $log_entry .= "User ID: " . $user_id . "\n";
+    $log_entry .= "Request Params: " . print_r($request->get_params(), true) . "\n";
+    $log_entry .= "FILES: " . print_r($_FILES, true) . "\n";
+    $log_entry .= "--------------------------------------------------\n";
+    $sk_log = WP_CONTENT_DIR . '/uploads/temp-avatars/sk_debug.log';
+    file_put_contents($sk_log, $log_entry, FILE_APPEND);
+    // ---------------------
     if (!$user_id) {
         return new WP_Error('not_logged_in', 'Musisz być zalogowany', ['status' => 401]);
     }
@@ -8765,31 +10761,176 @@ function sk_update_onboarding($request) {
     // --- FIELD MAPPING ---
     $id_data_urodzenia = 107;
     $id_kogo_szukam = 338;
+    $id_gender = 129;
     $id_religia = 346;
     $id_polityka = 351;
     $id_praca = 356;
     $id_dieta = 362;
 
     // 1. Birthdate (BuddyPress specific format)
+    // Frontend sends 'dataurodzenia' (YYYY-MM-DD or similar)
     $birthdate = $request->get_param('dataurodzenia');
-    if (!empty($birthdate)) {
-        $datasql = date('Y-m-d 00:00:00', strtotime($birthdate));
-        xprofile_set_field_data($id_data_urodzenia, $user_id, $datasql);
+    if (empty($birthdate)) {
+        $birthdate = $request->get_param('birthdate'); // Fallback
     }
 
-    // 2. Simple fields
+    if (!empty($birthdate)) {
+        // Ensure format is compatible with BuddyPress (usually YYYY-MM-DD 00:00:00)
+        $timestamp = strtotime($birthdate);
+        if ($timestamp) {
+            $datasql = date('Y-m-d 00:00:00', $timestamp);
+            xprofile_set_field_data($id_data_urodzenia, $user_id, $datasql);
+            // Log birthdate save
+            $sk_log = WP_CONTENT_DIR . '/uploads/temp-avatars/sk_debug.log';
+            file_put_contents($sk_log, "SK DEBUG: Saved Birthdate '$datasql' for User $user_id\n", FILE_APPEND);
+        }
+    }
+
+    // 2. Simple fields - Keys MUST match User's Frontend formData keys!
     $simple_fields = [
-        'kogo_szukam' => $id_kogo_szukam,
-        'religia'     => $id_religia,
-        'polityka'    => $id_polityka,
-        'praca'       => $id_praca,
-        'dieta'       => $id_dieta
+        'gender'       => $id_gender,      // Try 'gender'
+        'plec'         => $id_gender,      // Try 'plec' if frontend changes
+        'kogo_szukam'  => $id_kogo_szukam, // Frontend sends 'kogo_szukam'
+        'looking_for'  => $id_kogo_szukam, // Fallback
+        'religia'      => $id_religia,     // Frontend sends 'religia'
+        'religion'     => $id_religia,     // Fallback
+        'polityka'     => $id_polityka,    // Frontend sends 'polityka'
+        'politics'     => $id_polityka,    // Fallback
+        'praca'        => $id_praca,       // Frontend sends 'praca'
+        'work'         => $id_praca,       // Fallback
+        'dieta'        => $id_dieta,       // Frontend sends 'dieta'
+        'diet'         => $id_dieta        // Fallback
+    ];
+
+    // Translation Map (English -> Polish) AND (Polish -> Polish normalization)
+    $translation_map = [
+        // Gender
+        'Woman' => 'Kobieta',
+        'Man' => 'Mężczyzna',
+        'Kobiety' => 'Kobieta', // Normalization just in case? No, 'Kobiety' is for 'Looking For'
+
+        // Looking for
+        'Women' => 'Kobiety',
+        'Men' => 'Mężczyźni',
+        'Wszyscy' => 'Wszyscy', // Explicitly allow
+        'Everyone' => 'Wszyscy',
+
+        // Faith
+        'Believer' => 'Wierzący',
+        'Atheist' => 'Ateista',
+        'Spiritual but not religious' => 'Duchowy, ale nie religijny',
+        'Spiritual' => 'Duchowy', // Assuming frontend sends "Duchowy" maps to "Duchowy" via in_array check
+        'Duchowy' => 'Duchowy', // Explicit
+        'Other' => 'Inne',
+        
+        // Politics
+        'Conservative' => 'Konserwatywne',
+        'Liberal' => 'Liberalne',
+        'Centrist' => 'Centrowe',
+        'Apolitical' => 'Apolityczny',
+        
+        // Work
+        'Corporate' => 'Korporacja',
+        'Own Business' => 'Własny Biznes',
+        'Regular Job' => 'Normalna Praca',
+        'Creative Work' => 'Praca Kreatywna',
+        'Not working' => 'Nie pracuję',
+        
+        // Diet
+        'Omnivore' => 'Wszystkożerca',
+        'Vegetarian' => 'Wegetarianin',
+        'Vegan' => 'Weganin',
+        'Keto / Special' => 'Keto / Specjalistyczna',
+        'Keto/Inne' => 'Keto / Specjalistyczna' // Frontend sends "Keto/Inne"
     ];
 
     foreach ($simple_fields as $param => $field_id) {
         $val = $request->get_param($param);
         if (!empty($val)) {
-            xprofile_set_field_data($field_id, $user_id, sanitize_text_field($val));
+            // Helper function to translate value
+            $translate_val = function($v) use ($translation_map) {
+                // If the value is already in the map (as a value), return it. 
+                // This handles cases where we receive "Duchowy" and the map is 'Spiritual' => 'Duchowy'.
+                if (in_array($v, $translation_map)) {
+                    return $v;
+                }
+                return isset($translation_map[$v]) ? $translation_map[$v] : $v;
+            };
+
+            // Handle arrays (multi-selects) vs strings
+            if (is_array($val)) {
+                $translated_val = array_map($translate_val, $val);
+                // For arrays, BuddyPress typically expects an array of values
+                $sanitized_val = $translated_val; 
+            } else {
+                $translated_val = $translate_val($val);
+                $sanitized_val = sanitize_textarea_field($translated_val);
+            }
+
+            // ROBUST FIELD ID RESOLUTION
+            $field_names_map = [
+                'gender' => ['Płeć', 'Gender'],
+                'looking_for' => ['Kogo szukasz?', 'Looking for'],
+                'religion' => ['Podejście do wiary', 'Faith', 'Religion', 'Wiara'],
+                'politics' => ['Poglądy polityczne', 'Politics', 'Political Views'],
+                'work' => ['Styl pracy', 'Work', 'Job', 'Employment'],
+                'diet' => ['Styl jedzenia', 'Diet', 'Eating Style']
+            ];
+
+            $final_field_id = $field_id; // Default to hardcoded
+            if (isset($field_names_map[$param])) {
+                $potential_names = $field_names_map[$param];
+                // Prioritize the hardcoded ID if it exists
+                $resolved_id = sk_get_field_id_robust($potential_names, [$field_id]);
+                if ($resolved_id) {
+                    $final_field_id = $resolved_id;
+                }
+            }
+
+            // Log BEFORE saving
+            $debug_val = is_array($sanitized_val) ? print_r($sanitized_val, true) : $sanitized_val;
+            $log_msg = "SK DEBUG: Saving Field '$param' (Target ID: $final_field_id). Value: '$debug_val'";
+            file_put_contents(__DIR__ . '/sk_debug.log', $log_msg . "\n", FILE_APPEND);
+
+            $result = xprofile_set_field_data($final_field_id, $user_id, $sanitized_val);
+            
+            // Log AFTER saving
+            $log_msg = "SK DEBUG: Save Result for '$param': " . ($result ? 'SUCCESS' : 'FAILURE');
+            file_put_contents(__DIR__ . '/sk_debug.log', $log_msg . "\n", FILE_APPEND);
+        }
+    }
+
+    // --- PHOTO DELETIONS ---
+    $delete_photo_id = $request->get_param('delete_photo_id');
+    if (!empty($delete_photo_id)) {
+        $existing_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
+        if (is_array($existing_ids)) {
+            $new_ids = array_filter($existing_ids, function($id) use ($delete_photo_id) {
+                return (int)$id !== (int)$delete_photo_id;
+            });
+            update_user_meta($user_id, 'user_profile_photos_ids', array_values($new_ids));
+            
+            // If the deleted photo was the avatar, reset it to the first remaining photo or empty
+            $current_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+            if ((int)$current_avatar_id === (int)$delete_photo_id) {
+                $new_avatar_id = !empty($new_ids) ? reset($new_ids) : 0;
+                update_user_meta($user_id, 'user_avatar_id', $new_avatar_id);
+            }
+            
+            error_log("SK Update Onboarding: Deleted photo ID $delete_photo_id for user $user_id");
+        }
+    }
+
+    // --- AVATAR SWAP (SET AVATAR) ---
+    $set_avatar_id = $request->get_param('set_avatar_id');
+    if (!empty($set_avatar_id)) {
+        // Robust check: Verify ownership via post_author instead of potentially stale meta list
+        $photo_post = get_post((int)$set_avatar_id);
+        if ($photo_post && (int)$photo_post->post_author === (int)$user_id) {
+            update_user_meta($user_id, 'user_avatar_id', (int)$set_avatar_id);
+            error_log("SK Update Onboarding: Swapped avatar to ID $set_avatar_id for user $user_id (Ownership Verified)");
+        } else {
+             error_log("SK Update Onboarding: Failed to swap avatar - ID $set_avatar_id not owned by user $user_id");
         }
     }
 
@@ -8799,6 +10940,10 @@ function sk_update_onboarding($request) {
     require_once(ABSPATH . 'wp-admin/includes/media.php');
 
     $files = $request->get_file_params();
+    error_log("SK Update Onboarding: Received files: " . print_r($files, true));
+    $sk_log = WP_CONTENT_DIR . '/uploads/temp-avatars/sk_debug.log';
+    file_put_contents($sk_log, "SK Update Onboarding: Received files: " . count($files) . " keys: " . implode(',', array_keys($files)) . "\n", FILE_APPEND);
+    
     $profile_photos_ids = [];
 
     for ($i = 1; $i <= 6; $i++) {
@@ -8808,7 +10953,14 @@ function sk_update_onboarding($request) {
             $_FILES[$field_name] = $files[$field_name];
             $attach_id = media_handle_upload($field_name, 0);
 
-            if (!is_wp_error($attach_id)) {
+            if (is_wp_error($attach_id)) {
+                error_log("SK Update Onboarding ERROR: media_handle_upload failed for $field_name: " . $attach_id->get_error_message());
+                $sk_log = WP_CONTENT_DIR . '/uploads/temp-avatars/sk_debug.log';
+                file_put_contents($sk_log, "SK ERROR: media_handle_upload failed for $field_name: " . $attach_id->get_error_message() . "\n", FILE_APPEND);
+            } else {
+                error_log("SK Update Onboarding: Successfully uploaded $field_name, attach_id: $attach_id");
+                $sk_log = WP_CONTENT_DIR . '/uploads/temp-avatars/sk_debug.log';
+                file_put_contents($sk_log, "SK SUCCESS: Successfully uploaded $field_name, attach_id: $attach_id\n", FILE_APPEND);
                 wp_update_post([
                     'ID' => $attach_id,
                     'post_author' => $user_id
@@ -8843,23 +10995,10 @@ function sk_update_onboarding($request) {
     }
 
     error_log("SK Update Onboarding: Data received: " . print_r($request->get_params(), true));
-    
+    $existing_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
+    if (!is_array($existing_ids)) $existing_ids = [];
+
     if (!empty($profile_photos_ids)) {
-        $existing_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
-        if (!is_array($existing_ids)) $existing_ids = [];
-        
-        // If photo_1 (avatar) was uploaded, find and replace the old avatar ID in the gallery
-        $main_photo_id = $profile_photos_ids[0] ?? null; // Since we process in order, 1st one is usually main
-        $old_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
-        
-        if ($old_avatar_id && in_array($old_avatar_id, $existing_ids)) {
-            // Replace old avatar ID with new one if photo_1 was uploaded
-            // We'll handle this by removing the old one and letting the merge add the new one
-            $existing_ids = array_filter($existing_ids, function($id) use ($old_avatar_id) {
-                return (int)$id !== (int)$old_avatar_id;
-            });
-        }
-        
         $all_ids = array_unique(array_merge($existing_ids, $profile_photos_ids));
         update_user_meta($user_id, 'user_profile_photos_ids', array_values($all_ids));
         error_log("SK Update Onboarding: Updated user_profile_photos_ids for user $user_id. Total photos: " . count($all_ids));
@@ -8873,6 +11012,38 @@ function sk_update_onboarding($request) {
         'message' => 'Profil został uzupełniony',
         'onboarding_complete' => true
     ]);
+}
+
+/**
+ * Helper to robustly find a field ID by name, falling back to a list of IDs.
+ */
+function sk_get_field_id_robust($possible_names, $fallback_ids = []) {
+    if (!function_exists('xprofile_get_field_id_from_name')) {
+        return !empty($fallback_ids) ? $fallback_ids[0] : false;
+    }
+
+    // 1. Priority: Check if the provided Fallback ID (User Preferred) exists
+    global $wpdb;
+    $bp = buddypress();
+    if (isset($bp->profile->table_name_fields) && !empty($fallback_ids)) {
+        foreach ($fallback_ids as $fid) {
+            // Verify if this ID actually exists in the DB
+            $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$bp->profile->table_name_fields} WHERE id = %d", $fid));
+            if ($exists) {
+                // If it exists, USE IT. This honors the explicit ID provided.
+                return $fid; 
+            }
+        }
+    }
+
+    // 2. Fallback: Try to find by name if the ID was not found
+    foreach ($possible_names as $name) {
+        $id = xprofile_get_field_id_from_name($name);
+        if ($id) return $id;
+    }
+
+    // 3. Last resort
+    return !empty($fallback_ids) ? $fallback_ids[0] : false;
 }
 
 function sk_register_user_with_avatar($request) {
@@ -8957,14 +11128,32 @@ function sk_register_user_with_avatar($request) {
         }
     }
 
+    // Get Gender
+    $gender = $request->get_param('gender');
+    
+    $meta_args = [
+        'field_1' => $username,
+        'temp_password_for_activation' => $password // Zapisz czyste hasło do późniejszego ustawienia
+    ];
+
+    // Zapisz imię (Name, field ID 1) do pending_xprofile_data
+    // Jest to konieczne, ponieważ hook moj_fix_przenoszenia_danych_rejestracji
+    // patrzy na pending_xprofile_data, a jeśli ono istnieje, ignoruje 'field_1' z głównego meta.
+    $pending_data = [ 1 => $username ];
+
+    if (!empty($gender)) {
+        // Save gender to pending_xprofile_data (Field ID 129 for Empaths)
+        $pending_data[129] = $gender;
+        error_log("SK Registration: Added gender '$gender' to pending_xprofile_data");
+    }
+    
+    $meta_args['pending_xprofile_data'] = $pending_data;
+
     $signup_id = bp_core_signup_user(
         $username,
         $password,
         $email,
-        [
-            'field_1' => $username,
-            'temp_password_for_activation' => $password // Zapisz czyste hasło do późniejszego ustawienia
-        ]
+        $meta_args
     );
     
     global $wpdb;
@@ -9023,7 +11212,6 @@ function sk_register_user_with_avatar($request) {
     
     // Jeśli jest avatar, zapisz go tymczasowo z activation key
     if ($has_avatar) {
-        // Spróbuj pobrać activation key używając $signup_id
         $signup = $wpdb->get_row($wpdb->prepare(
             "SELECT activation_key FROM {$wpdb->prefix}signups WHERE user_login = %s OR signup_id = %d",
             $username,
@@ -9031,42 +11219,40 @@ function sk_register_user_with_avatar($request) {
         ));
         
         if ($signup && $signup->activation_key) {
+            $key_to_use = $signup->activation_key;
             $upload_dir = wp_upload_dir();
             $temp_dir = $upload_dir['basedir'] . '/temp-avatars/';
             
-            error_log("SK Registration: Attempting to save avatar for key " . $signup->activation_key);
-            error_log("SK Registration: Temp dir path: $temp_dir");
+            error_log("SK Registration: Attempting to save avatar for key: " . $key_to_use);
+            $sk_log = WP_CONTENT_DIR . '/uploads/temp-avatars/sk_debug.log';
+            file_put_contents($sk_log, "SK Registration: Saving avatar for key: $key_to_use\n", FILE_APPEND);
             
             if (!file_exists($temp_dir)) {
                 if (wp_mkdir_p($temp_dir)) {
                     error_log("SK Registration: Created temp dir $temp_dir");
+                    chmod($temp_dir, 0755);
                 } else {
                     error_log("SK Registration ERROR: Failed to create temp dir $temp_dir");
                 }
             }
             
-            if (is_writable($temp_dir)) {
-                error_log("SK Registration: Temp dir is writable");
-            } else {
-                error_log("SK Registration ERROR: Temp dir is NOT writable: $temp_dir");
-            }
-            
             $ext = pathinfo($files['avatar']['name'], PATHINFO_EXTENSION);
             if (empty($ext)) $ext = 'jpg';
+            
             $temp_file = $temp_dir . $signup->activation_key . '.' . $ext;
+            error_log("SK Registration: Target temp file path: $temp_file");
             
             if (move_uploaded_file($files['avatar']['tmp_name'], $temp_file)) {
-                error_log("SK Registration: Avatar saved successfully to $temp_file");
-                // Ustaw uprawnienia pliku
+                error_log("SK Registration: Avatar saved successfully to $temp_file. File size: " . filesize($temp_file));
                 chmod($temp_file, 0644);
             } else {
-                error_log("SK Registration ERROR: Failed to move uploaded file. Tmp name: " . $files['avatar']['tmp_name'] . " Target: $temp_file");
+                error_log("SK Registration ERROR: move_uploaded_file failed. SRC: " . $files['avatar']['tmp_name'] . " DEST: $temp_file. Error: " . print_r(error_get_last(), true));
             }
         } else {
-            error_log("SK Registration ERROR: Could not find activation_key for $username (ID: $signup_id) in signups table");
+            error_log("SK Registration ERROR: Could not find activation_key for $username (ID: $signup_id)");
         }
     } else {
-        error_log("SK Registration: No avatar saved. has_avatar=" . ($has_avatar ? 'YES' : 'NO'));
+        error_log("SK Registration: No avatar in request or upload error. " . print_r($files, true));
     }
     
     return rest_ensure_response([
@@ -9094,13 +11280,20 @@ function sk_set_avatar_after_activation($user_id, $key, $user) {
         error_log("SK Activation ERROR: Temp dir does NOT exist: $temp_dir");
     }
 
-    // Szukaj pliku z tym activation key
+    // Szukaj pliku z tym activation key (to jest klucz z maila)
     $files = glob($temp_dir . $key . '.*');
-    error_log("SK Activation: Looking for avatar files for key '$key': " . print_r($files, true));
+    error_log("SK Activation: Searching for pattern: " . $temp_dir . $key . '.*');
+    error_log("SK Activation: glob() result: " . print_r($files, true));
     
+    if (empty($files)) {
+        // Fallback: search for ANY file in case the key is slightly different but timestamp matches
+        $all_files = glob($temp_dir . '*');
+        error_log("SK Activation: FALLBACK - All files in temp_dir: " . print_r($all_files, true));
+    }
+
     if (!empty($files)) {
         $temp_file = $files[0];
-        error_log("Found temp file: $temp_file");
+        error_log("Found temp file: $temp_file. Size: " . filesize($temp_file));
         
         // 1. Dodaj plik do WordPress Media Library
         require_once(ABSPATH . 'wp-admin/includes/file.php');
@@ -9201,14 +11394,14 @@ function sk_set_avatar_after_activation($user_id, $key, $user) {
         // Stwórz miniatury
         $image = wp_get_image_editor($temp_file);
         if (!is_wp_error($image)) {
-            // Full size (150x150)
-            $image->resize(150, 150, true);
+            // Full size (300x300)
+            $image->resize(300, 300, true);
             $image->save($avatar_full);
             error_log("SK Activation: Saved full avatar to $avatar_full");
             
-            // Thumb size (50x50)
+            // Thumb size (100x100)
             $image = wp_get_image_editor($temp_file);
-            $image->resize(50, 50, true);
+            $image->resize(100, 100, true);
             $image->save($avatar_thumb);
             error_log("SK Activation: Saved thumb avatar to $avatar_thumb");
         } else {
@@ -9218,6 +11411,13 @@ function sk_set_avatar_after_activation($user_id, $key, $user) {
         // Usuń plik tymczasowy
         unlink($temp_file);
         error_log("Deleted temp file");
+        
+        // Czyść cache użytkownika aby zmiany były widoczne natychmiast
+        clean_user_cache($user_id);
+        if (function_exists('bp_core_clear_cache')) {
+            bp_core_clear_cache();
+        }
+        error_log("Cleared cache for user: $user_id after avatar activation");
     } else {
         error_log("No avatar file found for key: $key in $temp_dir");
     }
@@ -9413,6 +11613,11 @@ function sk_send_message_endpoint($request) {
     if (is_array($their_blocked) && in_array($sender_id, $their_blocked)) {
         return new WP_Error('user_blocked_you', 'Message not delivered', ['status' => 403]);
     }
+
+    // 3. Shadow Ban: Is recipient hidden?
+    if (get_user_meta($recipient_id, 'sk_is_hidden', true) === '1') {
+        return new WP_Error('user_not_found', 'Recipient not found', ['status' => 404]);
+    }
     
     if (empty($message)) {
         return new WP_Error('empty_message', 'Message cannot be empty', ['status' => 400]);
@@ -9431,9 +11636,19 @@ function sk_send_message_endpoint($request) {
             error_log("messages_new_message failed for sender=$sender_id, recipient=$recipient_id");
             return new WP_Error('send_failed', 'Failed to send message', ['status' => 500]);
         }
-        
+
         error_log("Message sent successfully, thread_id: $thread_id");
-        
+
+        // Release client early if possible
+        if (function_exists('fastcgi_finish_request')) {
+            echo json_encode([
+                'success' => true,
+                'thread_id' => $thread_id,
+                'message' => 'Message sent successfully'
+            ]);
+            fastcgi_finish_request();
+        }
+
         return rest_ensure_response([
             'success' => true,
             'thread_id' => $thread_id,
@@ -9769,9 +11984,52 @@ function sk_set_cooldown($sender_id, $recipient_id) {
 }
 
 /**
+ * Helper to find existing private thread between two users
+ */
+function sk_get_existing_thread_id($user_id, $recipient_id) {
+    global $wpdb;
+
+    // 1. Try Better Messages Native Function first
+    if (class_exists('Better_Messages') && function_exists('Better_Messages')) {
+        try {
+            // Better Messages usually has internal functions to get private thread
+            // This is a robust way to ask the plugin itself
+            if (method_exists(Better_Messages()->functions, 'get_private_thread_id')) {
+                $bm_thread_id = Better_Messages()->functions->get_private_thread_id($user_id, $recipient_id);
+                if ($bm_thread_id) return (int)$bm_thread_id;
+            }
+        } catch (Exception $e) {
+            error_log('sk_get_existing_thread_id: BM Exception: ' . $e->getMessage());
+        }
+    }
+
+    // 2. Fallback to BuddyPress table query
+    $bp = buddypress();
+    if (!isset($bp->messages->table_name_recipients)) return null;
+    
+    $table_name = $bp->messages->table_name_recipients;
+    
+    // Find a thread with EXACTLY these two users
+    $thread_id = $wpdb->get_var($wpdb->prepare("
+        SELECT r1.thread_id
+        FROM {$table_name} r1
+        JOIN {$table_name} r2 ON r1.thread_id = r2.thread_id
+        WHERE r1.user_id = %d 
+        AND r2.user_id = %d
+        AND (SELECT COUNT(*) FROM {$table_name} WHERE thread_id = r1.thread_id) = 2
+        LIMIT 1
+    ", $user_id, $recipient_id));
+    
+    return $thread_id ? (int)$thread_id : null;
+}
+
+/**
  * Send Super Message endpoint
  */
 function sk_super_message_send($request) {
+    if (!defined('SK_BYPASS_MATCH_CHECK')) {
+        define('SK_BYPASS_MATCH_CHECK', true);
+    }
     $sender_id = get_current_user_id();
     $recipient_id = intval($request->get_param('to_user_id'));
     $message = sanitize_textarea_field($request->get_param('message'));
@@ -9834,13 +12092,19 @@ function sk_super_message_send($request) {
         error_log('Super Message: Using Better Messages API');
         
         try {
+            $existing_thread_id = sk_get_existing_thread_id($sender_id, $recipient_id);
+            
             $bm_args = [
                 'sender_id'    => $sender_id,
                 'recipients'   => [$recipient_id],
-                'subject'      => '⭐ Super Wiadomość od ' . $sender_name,
                 'content'      => $message_content,
                 'return'       => 'thread_id'
             ];
+            
+            if ($existing_thread_id) {
+                $bm_args['thread_id'] = $existing_thread_id;
+                error_log('Super Message: Reusing existing thread_id: ' . $existing_thread_id);
+            }
             
             $result = Better_Messages()->functions->new_message($bm_args);
             
@@ -9868,13 +12132,21 @@ function sk_super_message_send($request) {
         // Fallback to BuddyPress
         error_log('Super Message: Using BuddyPress messages_new_message fallback');
         
-        $bp_message_id = messages_new_message([
+        $existing_thread_id = sk_get_existing_thread_id($sender_id, $recipient_id);
+        
+        $bp_args = [
             'sender_id' => $sender_id,
             'recipients' => [$recipient_id],
-            'subject' => '⭐ Super Wiadomość od ' . $sender_name,
             'content' => $message_content,
             'error_type' => 'wp_error'
-        ]);
+        ];
+        
+        if ($existing_thread_id) {
+            $bp_args['thread_id'] = $existing_thread_id;
+            error_log('Super Message: BP Fallback reusing thread_id: ' . $existing_thread_id);
+        }
+        
+        $bp_message_id = messages_new_message($bp_args);
         
         error_log('Super Message: messages_new_message returned: ' . print_r($bp_message_id, true));
         
@@ -9995,15 +12267,8 @@ function sk_super_message_respond($request) {
     
     // Handle specific actions
     if ($action === 'accept') {
-        // Create a real conversation using BuddyPress messages
-        if (function_exists('messages_new_message')) {
-            messages_new_message([
-                'sender_id' => $sender_id,
-                'recipients' => [$user_id],
-                'subject' => 'Super Wiadomość zaakceptowana',
-                'content' => $message['message']
-            ]);
-        }
+        // No need to send message again since it was sent in sk_super_message_send
+        // Metadata is already updated above to mark it as accepted
     } elseif ($action === 'not_now') {
         // Set cooldown for sender
         sk_set_cooldown($sender_id, $user_id);
@@ -10060,6 +12325,11 @@ function sk_super_message_inbox($request) {
         $sender = get_userdata($msg['from']);
         $avatar = get_avatar_url($msg['from'], ['size' => 150]);
         
+        // Shadow Ban Check
+        if (get_user_meta($msg['from'], 'sk_is_hidden', true) === '1') {
+            continue;
+        }
+
         $enriched[] = [
             'id' => $msg['id'],
             'from' => [
@@ -12020,13 +14290,72 @@ function sk_display_profile_photo_gallery() {
     // Jeśli jest tylko jedno zdjęcie, nie wyświetlaj galerii (avatar jest widoczny domyślnie)
     if (count($all_photo_ids) <= 1) return;
     
+    $is_owner = (is_user_logged_in() && get_current_user_id() == $user_id);
+    
     ?>
+    <style>
+        .gallery-photo-item .delete-photo-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: rgba(231, 76, 60, 0.85);
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            cursor: pointer;
+            z-index: 5;
+            transition: all 0.2s;
+            border: none;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .gallery-photo-item .delete-photo-btn:hover {
+            background: #c0392b;
+            transform: scale(1.1);
+        }
+        .gallery-photo-item .change-photo-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            padding: 5px;
+            text-align: center;
+            font-size: 11px;
+            font-weight: 500;
+            backdrop-filter: blur(2px);
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .gallery-photo-item:hover .change-photo-overlay {
+            opacity: 1;
+        }
+        .upload-photo-spinner {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255,255,255,0.7);
+            z-index: 10;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+
     <div class="profile-photo-gallery" style="
         margin: 20px 0;
         padding: 15px;
         background: #fff;
         border-radius: 12px;
         box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        position: relative;
     ">
         <h4 style="
             margin: 0 0 15px 0;
@@ -12059,7 +14388,7 @@ function sk_display_profile_photo_gallery() {
                 if (!$photo_url) continue;
             ?>
             <div class="gallery-photo-item" 
-                 onclick="openPhotoLightbox(<?php echo $index; ?>)"
+                 id="photo-item-<?php echo $photo_id; ?>"
                  style="
                     aspect-ratio: 1;
                     border-radius: 8px;
@@ -12068,16 +14397,28 @@ function sk_display_profile_photo_gallery() {
                     position: relative;
                     transition: transform 0.2s ease;
                  "
-                 onmouseover="this.style.transform='scale(1.03)';"
-                 onmouseout="this.style.transform='scale(1)';"
                  data-full-url="<?php echo esc_url($photo_full_url); ?>">
+                
                 <img src="<?php echo esc_url($photo_url); ?>" 
+                     onclick="openPhotoLightbox(<?php echo $index; ?>)"
                      alt="Zdjęcie profilowe <?php echo $index + 1; ?>"
                      style="
                         width: 100%;
                         height: 100%;
                         object-fit: cover;
+                        display: block;
                      ">
+
+                <?php if ($is_owner): ?>
+                    <button class="delete-photo-btn" onclick="event.stopPropagation(); deleteProfilePhoto(<?php echo $photo_id; ?>)" title="Usuń zdjęcie">✕</button>
+                    
+                    <?php if ($index === 0): ?>
+                        <div class="change-photo-overlay" onclick="event.stopPropagation(); document.getElementById('avatar-upload-input').click();">
+                            Zmień Zdjęcie
+                        </div>
+                    <?php endif; ?>
+                <?php endif; ?>
+
                 <?php if ($index === 0): ?>
                 <span style="
                     position: absolute;
@@ -12088,12 +14429,87 @@ function sk_display_profile_photo_gallery() {
                     font-size: 10px;
                     padding: 2px 6px;
                     border-radius: 8px;
+                    z-index: 2;
                 ">Główne</span>
                 <?php endif; ?>
+
+                <div class="upload-photo-spinner" id="spinner-<?php echo $photo_id; ?>">
+                    <img src="/wp-admin/images/spinner.gif" alt="Ładowanie...">
+                </div>
             </div>
             <?php endforeach; ?>
         </div>
+
+        <?php if ($is_owner): ?>
+            <input type="file" id="avatar-upload-input" style="display: none;" accept="image/*" onchange="uploadProfilePhoto(this)">
+        <?php endif; ?>
     </div>
+    
+    <script>
+        async function deleteProfilePhoto(photoId) {
+            if (!confirm('Czy na pewno chcesz usunąć to zdjęcie?')) return;
+            
+            const spinner = document.getElementById('spinner-' + photoId);
+            if (spinner) spinner.style.display = 'flex';
+            
+            try {
+                const formData = new FormData();
+                formData.append('action', 'sk_delete_profile_photo');
+                formData.append('photo_id', photoId);
+                formData.append('nonce', '<?php echo wp_create_nonce('sk_photo_management'); ?>');
+                
+                const response = await fetch('<?php echo admin_url('admin-ajax.php'); ?>', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Błąd: ' + (data.data || 'Nie udało się usunąć zdjęcia.'));
+                    if (spinner) spinner.style.display = 'none';
+                }
+            } catch (e) {
+                console.error('Delete error:', e);
+                alert('Błąd połączenia.');
+                if (spinner) spinner.style.display = 'none';
+            }
+        }
+
+        async function uploadProfilePhoto(input) {
+            if (!input.files || !input.files[0]) return;
+            
+            const file = input.files[0];
+            const formData = new FormData();
+            formData.append('action', 'sk_upload_profile_photo');
+            formData.append('photo', file);
+            formData.append('nonce', '<?php echo wp_create_nonce('sk_photo_management'); ?>');
+            
+            // Show global spinner or update the first item's spinner
+            const firstSpinner = document.querySelector('.upload-photo-spinner');
+            if (firstSpinner) firstSpinner.style.display = 'flex';
+            
+            try {
+                const response = await fetch('<?php echo admin_url('admin-ajax.php'); ?>', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Błąd: ' + (data.data || 'Nie udało się wgrać zdjęcia.'));
+                    if (firstSpinner) firstSpinner.style.display = 'none';
+                }
+            } catch (e) {
+                console.error('Upload error:', e);
+                alert('Błąd połączenia.');
+                if (firstSpinner) firstSpinner.style.display = 'none';
+            }
+        }
+    </script>
     
     <!-- Lightbox do powiększania zdjęć -->
     <div id="photo-lightbox" onclick="closePhotoLightbox()" style="
@@ -12227,6 +14643,91 @@ function sk_display_profile_photo_gallery() {
 }
 add_action('bp_before_member_header_meta', 'sk_display_profile_photo_gallery');
 
+/**
+ * AJAX Handler for deleting a profile photo (non-mobile version)
+ */
+add_action('wp_ajax_sk_delete_profile_photo', 'sk_delete_profile_photo_ajax');
+function sk_delete_profile_photo_ajax() {
+    check_ajax_referer('sk_photo_management', 'nonce');
+    
+    if (!is_user_logged_in()) {
+        wp_send_json_error('Musisz być zalogowany.');
+    }
+    
+    $user_id = get_current_user_id();
+    $photo_id = isset($_POST['photo_id']) ? intval($_POST['photo_id']) : 0;
+    
+    if (!$photo_id) {
+        wp_send_json_error('Nieprawidłowe ID zdjęcia.');
+    }
+    
+    $existing_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
+    if (!is_array($existing_ids)) $existing_ids = array();
+    
+    if (!in_array($photo_id, $existing_ids)) {
+        wp_send_json_error('Nie masz uprawnień do usunięcia tego zdjęcia.');
+    }
+    
+    // Remove from gallery
+    $new_ids = array_filter($existing_ids, function($id) use ($photo_id) {
+        return (int)$id !== (int)$photo_id;
+    });
+    $new_ids = array_values($new_ids);
+    update_user_meta($user_id, 'user_profile_photos_ids', $new_ids);
+    
+    // If it was the main avatar, update to the first remaining or empty
+    $current_avatar_id = get_user_meta($user_id, 'user_avatar_id', true);
+    if ((int)$current_avatar_id === (int)$photo_id) {
+        if (!empty($new_ids)) {
+            update_user_meta($user_id, 'user_avatar_id', $new_ids[0]);
+        } else {
+            delete_user_meta($user_id, 'user_avatar_id');
+        }
+    }
+    
+    wp_send_json_success('Zdjęcie zostało usunięte.');
+}
+
+/**
+ * AJAX Handler for uploading/changing profile photo (non-mobile version)
+ */
+add_action('wp_ajax_sk_upload_profile_photo', 'sk_upload_profile_photo_ajax');
+function sk_upload_profile_photo_ajax() {
+    check_ajax_referer('sk_photo_management', 'nonce');
+    
+    if (!is_user_logged_in()) {
+        wp_send_json_error('Musisz być zalogowany.');
+    }
+    
+    if (!isset($_FILES['photo'])) {
+        wp_send_json_error('Brak pliku.');
+    }
+    
+    $user_id = get_current_user_id();
+    
+    require_once(ABSPATH . 'wp-admin/includes/file.php');
+    require_once(ABSPATH . 'wp-admin/includes/image.php');
+    require_once(ABSPATH . 'wp-admin/includes/media.php');
+    
+    $attachment_id = media_handle_upload('photo', 0);
+    
+    if (is_wp_error($attachment_id)) {
+        wp_send_json_error($attachment_id->get_error_message());
+    }
+    
+    $existing_ids = get_user_meta($user_id, 'user_profile_photos_ids', true);
+    if (!is_array($existing_ids)) $existing_ids = array();
+    
+    // Unshift to make it the first (main) photo
+    array_unshift($existing_ids, $attachment_id);
+    $existing_ids = array_unique($existing_ids);
+    
+    update_user_meta($user_id, 'user_profile_photos_ids', $existing_ids);
+    update_user_meta($user_id, 'user_avatar_id', $attachment_id);
+    
+    wp_send_json_success('Zdjęcie zostało dodane.');
+}
+
 // ========================================
 // FILTER: Ukryj użytkowników bez zdjęcia profilowego w REST API (dla aplikacji mobilnej)
 // ========================================
@@ -12335,7 +14836,6 @@ function hook_premium_profile_css() {
                 --pm-border: #444;
             }
 
-<<<<<<< SEARCH
             /* --- FORCE ALL PARENTS TO FULL WIDTH (MOBILE FIX) --- */
             body.buddypress,
             body.buddypress .site,
@@ -12542,7 +15042,6 @@ function hook_premium_profile_css() {
                 border-radius: 20px !important;
                 padding: 5px 15px !important;
             }
->>>>>>> CHANGE
 
             /* --- HEADINGS & LEGENDS --- */
             /* Ensure they are visible and gold */
@@ -13926,12 +16425,20 @@ function sk_get_activity_feed($request) {
     $page = $request->get_param('page') ?: 1;
     $per_page = $request->get_param('per_page') ?: 20;
     
-    $activities = bp_activity_get(array(
+    $args = array(
         'action' => 'activity_update',
         'display_comments' => 'stream',
         'page' => $page,
         'per_page' => $per_page
-    ));
+    );
+
+    $hidden_users = sk_get_hidden_user_ids();
+    if (!empty($hidden_users)) {
+        $args['user_id'] = $hidden_users;
+        $args['exclude_user_ids'] = true; // This is a BuddyPress arg to exclude the user_id list
+    }
+
+    $activities = bp_activity_get($args);
     
     if (empty($activities['activities'])) {
         return array();
@@ -14032,8 +16539,8 @@ function sk_delete_activity_post($request) {
     
     $act = $activity['activities'][0];
     
-    // Check ownership
-    if ($act->user_id != get_current_user_id()) {
+    // Check ownership or administrator role
+    if ($act->user_id != get_current_user_id() && !current_user_can('administrator')) {
         return new WP_Error('forbidden', 'You can only delete your own posts', array('status' => 403));
     }
     
@@ -14180,3 +16687,74 @@ function pm_add_tablica_to_menu() {
 }
 // Run after page is created
 add_action('admin_init', 'pm_add_tablica_to_menu', 20);
+
+/**
+ * Global filter for BuddyPress REST XProfile data to hide birth date if user enabled 'sk_hide_age'
+ */
+add_filter('bp_rest_xprofile_data_get_items_response', 'sk_filter_buddypress_rest_age', 10, 3);
+add_filter('bp_rest_xprofile_fields_get_items_response', 'sk_filter_buddypress_rest_age', 10, 3);
+add_filter('bp_rest_xprofile_groups_get_items_response', 'sk_filter_buddypress_rest_age', 10, 3);
+
+function sk_filter_buddypress_rest_age($response, $handler, $request) {
+    if (empty($response->data)) return $response;
+
+    $user_id = $request->get_param('user_id');
+    if (!$user_id) {
+        $user_id = get_current_user_id();
+    }
+    
+    // Own data is always visible to the user
+    if ($user_id && $user_id == get_current_user_id()) {
+        return $response;
+    }
+
+    $hide_age = get_user_meta($user_id, 'sk_hide_age', true) === '1';
+    if (!$hide_age) return $response;
+
+    // Filter fields/groups
+    // Logic depends on whether response is a single group, array of groups, or fields list
+    if (isset($response->data['fields'])) {
+        // Single group or fields list
+        $filtered_fields = [];
+        foreach ($response->data['fields'] as $field) {
+            $field_id = isset($field['id']) ? $field['id'] : (isset($field->id) ? $field->id : 0);
+            if ($field_id != 107) {
+                $filtered_fields[] = $field;
+            }
+        }
+        $response->data['fields'] = $filtered_fields;
+    } elseif (is_array($response->data)) {
+        // Array of items (groups or fields)
+        foreach ($response->data as $key => &$item) {
+            if (isset($item['fields'])) {
+                // It's a group
+                $filtered_fields = [];
+                foreach ($item['fields'] as $field) {
+                    $field_id = isset($field['id']) ? $field['id'] : (isset($field->id) ? $field->id : 0);
+                    if ($field_id != 107) {
+                        $filtered_fields[] = $field;
+                    }
+                }
+                $item['fields'] = $filtered_fields;
+            } elseif (isset($item['id']) && $item['id'] == 107) {
+                // It's a field list and this is field 107
+                unset($response->data[$key]);
+            }
+        }
+        if (!isset($response->data[0]['fields'])) {
+            $response->data = array_values($response->data);
+        }
+    }
+    
+    return $response;
+}
+
+// ============================================================================
+// WP UPLOAD HELPERS - ALLOW HEIC
+// ============================================================================
+add_filter('upload_mimes', 'sk_allow_heic_uploads');
+function sk_allow_heic_uploads($mimes) {
+    if (!isset($mimes['heic'])) $mimes['heic'] = 'image/heic';
+    if (!isset($mimes['heif'])) $mimes['heif'] = 'image/heif';
+    return $mimes;
+}
