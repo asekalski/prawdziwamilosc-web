@@ -1,0 +1,11 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "4X2H532KV6.com.prawdziwamilosc.app",
+        "paths": ["/activate", "/members/*", "/messages/*", "/activity/*", "/"]
+      }
+    ]
+  }
+}
