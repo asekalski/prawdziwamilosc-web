@@ -17011,7 +17011,7 @@ function sk_get_single_activity($request) {
         'favorited' => bp_activity_is_favorite($activity->id, get_current_user_id()),
         'favorite_count' => (int)(bp_activity_get_meta($activity->id, 'favorite_count') ?: 0),
         'comment_count' => (int)$wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM {$wpdb->prefix}bp_activity WHERE type = 'activity_comment' AND item_id = %d",
+            "SELECT COUNT(id) FROM {$wpdb->prefix}bp_activity WHERE type = 'activity_comment' AND item_id = %d",
             $activity->id
         )),
         'media' => $media
@@ -17127,7 +17127,7 @@ function sk_get_activity_feed($request) {
             'favorited' => bp_activity_is_favorite($activity->id, get_current_user_id()),
             'favorite_count' => bp_activity_get_meta($activity->id, 'favorite_count') ?: 0,
             'comment_count' => (int)$wpdb->get_var($wpdb->prepare(
-                "SELECT COUNT(*) FROM {$wpdb->prefix}bp_activity WHERE type = 'activity_comment' AND item_id = %d",
+                "SELECT COUNT(id) FROM {$wpdb->prefix}bp_activity WHERE type = 'activity_comment' AND item_id = %d",
                 $activity->id
             )),
             'media' => $media
