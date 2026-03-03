@@ -17063,6 +17063,7 @@ function sk_get_activity_feed($request) {
     }
     
     $formatted = array();
+    global $wpdb;
     foreach ($activities['activities'] as $activity) {
         // Extract media from activity meta
         $media = array();
