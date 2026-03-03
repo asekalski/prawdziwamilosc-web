@@ -1855,12 +1855,22 @@ if (!function_exists('calculate_match_percentage')) {
     {
         if ($user1_id == $user2_id)
             return 100;
-        $fields_to_compare = ['Polityka', 'Dieta', 'Religia', 'Styl pracy'];
+        $fields_to_compare = [
+            'Polityka', 
+            'Dieta', 
+            'Religia', 
+            'Styl pracy',
+            'Alkohol',
+            'Dzieci',
+            'Papierosy'
+        ];
         $matched_fields = 0;
         $total_fields = 0;
         foreach ($fields_to_compare as $field) {
-            $val1 = trim(bp_get_profile_field_data(['field' => $field, 'user_id' => $user1_id]));
-            $val2 = trim(bp_get_profile_field_data(['field' => $field, 'user_id' => $user2_id]));
+            $raw1 = bp_get_profile_field_data(['field' => $field, 'user_id' => $user1_id]);
+            $val1 = is_array($raw1) ? trim(implode(', ', $raw1)) : trim((string)$raw1);
+            $raw2 = bp_get_profile_field_data(['field' => $field, 'user_id' => $user2_id]);
+            $val2 = is_array($raw2) ? trim(implode(', ', $raw2)) : trim((string)$raw2);
             if ($val1 !== '' && $val2 !== '') {
                 $total_fields++;
                 if ($val1 === $val2)
@@ -1871,6 +1881,33 @@ if (!function_exists('calculate_match_percentage')) {
             return 0;
         return round(($matched_fields / $total_fields) * 100);
     }
+}
+
+/**
+ * Get match percentage using the BP Match Me plugin's weighted calculation.
+ * Falls back to the simple calculate_match_percentage if the plugin is not available.
+ */
+function sk_get_bp_match_percentage($user1_id, $user2_id) {
+    static $match_me_obj = null;
+    static $plugin_loaded = false;
+
+    if (!$plugin_loaded) {
+        $match_me_plugin_file = WP_PLUGIN_DIR . '/match-me-for-buddypress/match-me-for-buddypress.php';
+        if (file_exists($match_me_plugin_file)) {
+            require_once($match_me_plugin_file);
+        }
+        if (class_exists('Mp_BP_Match')) {
+            $match_me_obj = new Mp_BP_Match();
+        }
+        $plugin_loaded = true;
+    }
+
+    if ($match_me_obj && is_callable([$match_me_obj, 'hmk_get_matching_percentage_number'])) {
+        return intval($match_me_obj->hmk_get_matching_percentage_number($user2_id, $user1_id));
+    }
+
+    // Fallback to simple calculation
+    return calculate_match_percentage($user1_id, $user2_id);
 }
 
 /**
@@ -8165,6 +8202,14 @@ function sk_get_batch_hires_avatars($user_ids) {
 }
 
 add_action('rest_api_init', function () {
+    register_rest_route('sk/v1', '/messages/threads/all', [
+        'methods' => 'GET',
+        'callback' => 'sk_get_all_message_threads',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+
     register_rest_route('sk/v1', '/members', [
         'methods' => 'GET',
         'callback' => 'sk_get_members_endpoint',
@@ -8246,7 +8291,106 @@ add_action('rest_api_init', function() {
             return is_user_logged_in();
         }
     ]);
+
+    // Compatibility Breakdown endpoint
+    register_rest_route('sk/v1', '/compatibility-breakdown', [
+        'methods' => 'GET',
+        'callback' => 'sk_compatibility_breakdown_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
 });
+
+function sk_compatibility_breakdown_endpoint($request) {
+    $current_user_id = get_current_user_id();
+    $target_user_id = (int) $request->get_param('user_id');
+
+    if (!$target_user_id || $target_user_id == $current_user_id) {
+        return new WP_Error('invalid_user', 'Invalid target user', ['status' => 400]);
+    }
+
+    $target_user = get_userdata($target_user_id);
+    if (!$target_user) {
+        return new WP_Error('user_not_found', 'User not found', ['status' => 404]);
+    }
+
+    // Define the compatibility fields (matching BP Match weighted fields)
+    $fields = [
+        ['id' => 346, 'label' => 'Wiara', 'icon' => '🙏', 'names' => ['Podejście do wiary', 'Wiara', 'Faith', 'Religion']],
+        ['id' => 351, 'label' => 'Polityka', 'icon' => '🏛️', 'names' => ['Poglądy Polityczne', 'Polityka', 'Politics', 'Political Views']],
+        ['id' => 356, 'label' => 'Styl Pracy', 'icon' => '💼', 'names' => ['Styl Pracy', 'Praca', 'Work', 'Employment']],
+        ['id' => 362, 'label' => 'Dieta', 'icon' => '🥗', 'names' => ['Styl Jedzenia', 'Dieta', 'Diet', 'Eating Style', 'Styl jedzenia']],
+        ['id' => 286, 'label' => 'Alkohol', 'icon' => '🍷', 'names' => ['Alkohol', 'Podejście do Alkoholu']],
+        ['id' => 6947, 'label' => 'Dzieci', 'icon' => '👶', 'names' => ['Dzieci']],
+        ['id' => 6951, 'label' => 'Papierosy', 'icon' => '🚬', 'names' => ['Papierosy']],
+        ['id' => 303, 'label' => 'Zodiak', 'icon' => '✨', 'names' => ['Znak zodiaku', 'Zodiak', 'Znak Zodiaku', 'Zodiac Sign']],
+        ['id' => 0, 'label' => 'Wykształcenie', 'icon' => '🎓', 'names' => ['Wykształcenie', 'Education']],
+        ['id' => 0, 'label' => 'Osobowość', 'icon' => '🧠', 'names' => ['Osobowość', 'Personality']],
+    ];
+
+    $breakdown = [];
+    $matched = 0;
+    $total = 0;
+
+    foreach ($fields as $field) {
+        // Try by field ID first (skip if ID is 0 — name-only fields)
+        $my_val = '';
+        if ($field['id'] > 0) {
+            $my_raw = xprofile_get_field_data($field['id'], $current_user_id);
+            $my_val = is_array($my_raw) ? trim(implode(', ', $my_raw)) : trim((string)$my_raw);
+        }
+        if ($my_val === '') {
+            foreach ($field['names'] as $name) {
+                $my_raw = bp_get_profile_field_data(['field' => $name, 'user_id' => $current_user_id]);
+                $my_val = is_array($my_raw) ? trim(implode(', ', $my_raw)) : trim((string)$my_raw);
+                if ($my_val !== '') break;
+            }
+        }
+
+        // Try by field ID first for their value
+        $their_val = '';
+        if ($field['id'] > 0) {
+            $their_raw = xprofile_get_field_data($field['id'], $target_user_id);
+            $their_val = is_array($their_raw) ? trim(implode(', ', $their_raw)) : trim((string)$their_raw);
+        }
+        if ($their_val === '') {
+            foreach ($field['names'] as $name) {
+                $their_raw = bp_get_profile_field_data(['field' => $name, 'user_id' => $target_user_id]);
+                $their_val = is_array($their_raw) ? trim(implode(', ', $their_raw)) : trim((string)$their_raw);
+                if ($their_val !== '') break;
+            }
+        }
+
+        // If both have values, count it
+        if ($my_val !== '' && $their_val !== '') {
+            $total++;
+            $is_match = ($my_val === $their_val);
+            if ($is_match) $matched++;
+        } else {
+            $is_match = null; // Unknown — one or both haven't set this
+        }
+
+        $breakdown[] = [
+            'label' => $field['label'],
+            'icon' => $field['icon'],
+            'my_value' => $my_val ?: null,
+            'their_value' => $their_val ?: null,
+            'is_match' => $is_match,
+        ];
+    }
+
+    // Use BP Match plugin for overall weighted percentage
+    $overall = sk_get_bp_match_percentage($current_user_id, $target_user_id);
+
+    return rest_ensure_response([
+        'overall_percent' => $overall,
+        'total_fields' => $total,
+        'matched_fields' => $matched,
+        'target_name' => $target_user->display_name,
+        'breakdown' => $breakdown,
+    ]);
+}
 
 /**
  * Delete a specific BuddyPress notification
@@ -8946,6 +9090,7 @@ function sk_get_matches_endpoint($request) {
             'diet' => $diet_val,
             'zodiac_sign' => $zodiac_val,
             'last_activity' => sk_format_activity_status(isset($batch_activity[$user_id]) ? $batch_activity[$user_id] : null, current_user_can('manage_options')),
+            'match_percentage' => sk_get_bp_match_percentage($current_user_id, $user_id),
             'thread_id' => intval($thread_id),
         ];
     }
@@ -9060,6 +9205,7 @@ function sk_get_liked_users_endpoint($request) {
             'diet' => $diet_val,
             'zodiac_sign' => $zodiac_val,
             'last_activity' => sk_format_activity_status(isset($batch_activity[$user_id]) ? $batch_activity[$user_id] : null, current_user_can('manage_options')),
+            'match_percentage' => sk_get_bp_match_percentage($current_user_id, $user_id),
         ];
     }
     
@@ -9367,6 +9513,7 @@ function sk_get_members_endpoint($request) {
                 'last_activity' => sk_format_activity_status(isset($batch_activity[$u_id]) ? $batch_activity[$u_id] : null, current_user_can('manage_options')),
                 'numerology' => isset($x_data[6722]) ? $x_data[6722] : ($birth_date ? sk_calculate_life_path_number($birth_date) : null),
                 'zodiac' => $zodiac_val,
+                'match_percentage' => sk_get_bp_match_percentage($current_user_id, $u_id),
                 'xprofile' => $xprofile_mock
             ];
 
@@ -9873,6 +10020,7 @@ function sk_get_likes_me_endpoint($request) {
             'diet' => $diet_val,
             'zodiac_sign' => $zodiac_val,
             'last_activity' => sk_format_activity_status(isset($batch_activity[$user_id]) ? $batch_activity[$user_id] : null, current_user_can('manage_options')),
+            'match_percentage' => sk_get_bp_match_percentage($current_user_id, $user_id),
         ];
     }
     
@@ -16719,6 +16867,24 @@ function sk_register_activity_routes() {
         }
     ));
     
+    // Get activity comments
+    register_rest_route('sk/v1', '/activity/(?P<id>\d+)/comments', array(
+        'methods' => 'GET',
+        'callback' => 'sk_get_activity_comments',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ));
+    
+    // Get single activity
+    register_rest_route('sk/v1', '/activity/(?P<id>\d+)', array(
+        'methods' => 'GET',
+        'callback' => 'sk_get_single_activity',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ));
+    
     // Delete activity post
     register_rest_route('sk/v1', '/activity/(?P<id>\d+)', array(
         'methods' => 'DELETE',
@@ -16749,6 +16915,112 @@ function sk_register_activity_routes() {
 add_action('rest_api_init', 'sk_register_activity_routes');
 
 /**
+ * Get comments for a specific activity
+ */
+function sk_get_activity_comments($request) {
+    $id = intval($request->get_param('id'));
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'bp_activity';
+
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM {$table} WHERE type = 'activity_comment' AND item_id = %d ORDER BY date_recorded ASC",
+        $id
+    ));
+
+    if (empty($rows)) {
+        return rest_ensure_response(array());
+    }
+
+    $formatted = array();
+    foreach ($rows as $comment) {
+        $formatted[] = array(
+            'id'          => intval($comment->id),
+            'user_id'     => intval($comment->user_id),
+            'content'     => $comment->content,
+            'date'        => $comment->date_recorded,
+            'type'        => $comment->type,
+            'name'        => bp_core_get_user_displayname($comment->user_id),
+            'user_avatar' => array(
+                'full' => bp_core_fetch_avatar(array(
+                    'item_id' => $comment->user_id,
+                    'type'    => 'full',
+                    'html'    => false
+                ))
+            ),
+            'favorited'      => bp_activity_is_favorite($comment->id, get_current_user_id()),
+            'favorite_count' => (int)(bp_activity_get_meta($comment->id, 'favorite_count') ?: 0)
+        );
+    }
+
+    return rest_ensure_response($formatted);
+}
+
+/**
+ * Get single activity
+ */
+function sk_get_single_activity($request) {
+    if (!function_exists('bp_activity_get_specific')) {
+        return new WP_Error('bp_disabled', 'BuddyPress not active', array('status' => 500));
+    }
+    
+    $activity_id = $request['id'];
+    $activities = bp_activity_get_specific(array(
+        'activity_ids' => array($activity_id),
+        'display_comments' => 'stream',
+        'show_hidden' => true
+    ));
+    
+    if (empty($activities['activities'])) {
+        return new WP_Error('no_activity', 'Activity not found', array('status' => 404));
+    }
+    
+    $activity = $activities['activities'][0];
+    global $wpdb;
+    
+    // Extract media from activity meta
+    $media = array();
+    $media_id = bp_activity_get_meta($activity->id, 'sk_media_id');
+    $media_url = bp_activity_get_meta($activity->id, 'sk_media_url');
+    
+    if ($media_id && $media_url) {
+        $media[] = array(
+            'id' => (int)$media_id,
+            'url' => $media_url
+        );
+    }
+    
+    // Strip embedded image HTML from content
+    $clean_content = preg_replace('/<div class="activity-media">.*?<\/div>/s', '', $activity->content);
+    $clean_content = trim($clean_content);
+
+    $formatted = array(
+        'id' => (int)$activity->id,
+        'user_id' => (int)$activity->user_id,
+        'content' => $clean_content,
+        'date' => $activity->date_recorded,
+        'type' => $activity->type,
+        'name' => bp_core_get_user_displayname($activity->user_id),
+        'user_avatar' => array(
+            'full' => bp_core_fetch_avatar(array(
+                'item_id' => $activity->user_id,
+                'type' => 'full',
+                'html' => false
+            ))
+        ),
+        'favorited' => bp_activity_is_favorite($activity->id, get_current_user_id()),
+        'favorite_count' => (int)(bp_activity_get_meta($activity->id, 'favorite_count') ?: 0),
+        'comment_count' => (int)$wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->prefix}bp_activity WHERE type = 'activity_comment' AND item_id = %d",
+            $activity->id
+        )),
+        'media' => $media
+    );
+    
+    return rest_ensure_response($formatted);
+}
+
+/**
  * Get activity feed
  */
 function sk_get_activity_feed($request) {
@@ -16758,18 +17030,30 @@ function sk_get_activity_feed($request) {
     
     $page = $request->get_param('page') ?: 1;
     $per_page = $request->get_param('per_page') ?: 20;
+    $user_id = $request->get_param('user_id');
+    $type = $request->get_param('type') ?: 'activity_update';
     
     $args = array(
-        'action' => 'activity_update',
-        'display_comments' => 'stream',
+        'action' => $type,
+        'display_comments' => false,
         'page' => $page,
         'per_page' => $per_page
     );
 
-    $hidden_users = sk_get_hidden_user_ids();
-    if (!empty($hidden_users)) {
-        $args['user_id'] = $hidden_users;
-        $args['exclude_user_ids'] = true; // This is a BuddyPress arg to exclude the user_id list
+    $display_comments = $request->get_param('display_comments');
+    if ($display_comments === 'stream') {
+        $args['display_comments'] = 'stream';
+        $args['action'] = 'activity_update,activity_comment';
+    }
+
+    if ($user_id) {
+        $args['user_id'] = $user_id;
+    } else {
+        $hidden_users = sk_get_hidden_user_ids();
+        if (!empty($hidden_users)) {
+            $args['user_id'] = $hidden_users;
+            $args['exclude_user_ids'] = true;
+        }
     }
 
     $activities = bp_activity_get($args);
@@ -16780,10 +17064,55 @@ function sk_get_activity_feed($request) {
     
     $formatted = array();
     foreach ($activities['activities'] as $activity) {
+        // Extract media from activity meta
+        $media = array();
+        $media_id = bp_activity_get_meta($activity->id, 'sk_media_id');
+        $media_url = bp_activity_get_meta($activity->id, 'sk_media_url');
+        
+        if ($media_id && $media_url) {
+            $media[] = array(
+                'id' => (int)$media_id,
+                'url' => $media_url
+            );
+        }
+        
+        // Strip embedded image HTML from content for clean text display
+        $clean_content = preg_replace('/<div class="activity-media">.*?<\/div>/s', '', $activity->content);
+        $clean_content = trim($clean_content);
+        
+        // Fetch parent post details if this is a comment
+        $parent_data = null;
+        if ($activity->type === 'activity_comment' && !empty($activity->item_id)) {
+            $parent_activities = bp_activity_get_specific(array(
+                'activity_ids' => $activity->item_id,
+                'display_comments' => false
+            ));
+            
+            if (!empty($parent_activities['activities'][0])) {
+                $p_act = $parent_activities['activities'][0];
+                $p_clean_content = preg_replace('/<div class="activity-media">.*?<\/div>/s', '', $p_act->content);
+                $p_clean_content = trim($p_clean_content);
+                
+                $parent_data = array(
+                    'id' => $p_act->id,
+                    'user_id' => $p_act->user_id,
+                    'name' => bp_core_get_user_displayname($p_act->user_id),
+                    'content' => $p_clean_content,
+                    'user_avatar' => array(
+                        'full' => bp_core_fetch_avatar(array(
+                            'item_id' => $p_act->user_id,
+                            'type' => 'full',
+                            'html' => false
+                        ))
+                    )
+                );
+            }
+        }
+        
         $formatted[] = array(
             'id' => $activity->id,
             'user_id' => $activity->user_id,
-            'content' => $activity->content,
+            'content' => $clean_content,
             'date' => $activity->date_recorded,
             'type' => $activity->type,
             'name' => bp_core_get_user_displayname($activity->user_id),
@@ -16794,9 +17123,14 @@ function sk_get_activity_feed($request) {
                     'html' => false
                 ))
             ),
+            'parent_content' => $parent_data,
             'favorited' => bp_activity_is_favorite($activity->id, get_current_user_id()),
             'favorite_count' => bp_activity_get_meta($activity->id, 'favorite_count') ?: 0,
-            'comment_count' => bp_activity_get_comment_count($activity->id)
+            'comment_count' => (int)$wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->prefix}bp_activity WHERE type = 'activity_comment' AND item_id = %d",
+                $activity->id
+            )),
+            'media' => $media
         );
     }
     
@@ -16813,30 +17147,87 @@ function sk_create_activity_post($request) {
     
     $content = $request->get_param('content');
     
-    if (empty($content)) {
+    $type = $request->get_param('type');
+    $parent_id = $request->get_param('parent');
+    
+    if (empty($content) && empty($_FILES['media'])) {
         return new WP_Error('empty_content', 'Content cannot be empty', array('status' => 400));
     }
     
-    $activity_id = bp_activity_add(array(
-        'user_id' => get_current_user_id(),
-        'content' => sanitize_textarea_field($content),
-        'component' => 'activity',
-        'type' => 'activity_update'
-    ));
+    $media_url = '';
+    $media_id = 0;
     
-    if (!$activity_id) {
-        return new WP_Error('create_failed', 'Failed to create activity', array('status' => 500));
+    // Handle image upload
+    if (!empty($_FILES['media']) && $_FILES['media']['error'] === UPLOAD_ERR_OK) {
+        require_once(ABSPATH . 'wp-admin/includes/image.php');
+        require_once(ABSPATH . 'wp-admin/includes/file.php');
+        require_once(ABSPATH . 'wp-admin/includes/media.php');
+        
+        $attachment_id = media_handle_upload('media', 0);
+        
+        if (!is_wp_error($attachment_id)) {
+            $media_url = wp_get_attachment_url($attachment_id);
+            $media_id = $attachment_id;
+        } else {
+            error_log('Activity media upload failed: ' . $attachment_id->get_error_message());
+        }
     }
     
-    $activity = bp_activity_get_specific(array('activity_ids' => $activity_id));
+    // Build activity content with optional image
+    $activity_content = sanitize_textarea_field($content);
+    if ($media_url) {
+        $activity_content .= "\n\n<div class=\"activity-media\"><img src=\"{$media_url}\" class=\"activity-image\" /></div>";
+    }
+    
+    $activity_id = false;
+    
+    // Check if we are creating a comment vs a regular post
+    if ($type === 'activity_comment' && !empty($parent_id)) {
+        // Find the parent activity to get the activity_id to attach to
+        $parent_activity = bp_activity_get_specific(array('activity_ids' => $parent_id));
+        
+        if (empty($parent_activity['activities'])) {
+            return new WP_Error('parent_not_found', 'Parent activity not found', array('status' => 404));
+        }
+        
+        $activity_id = bp_activity_new_comment(array(
+            'activity_id' => $parent_id,
+            'content'     => $activity_content,
+            'user_id'     => get_current_user_id()
+        ));
+    } else {
+        // Regular activity update
+        $activity_id = bp_activity_add(array(
+            'user_id' => get_current_user_id(),
+            'content' => $activity_content,
+            'component' => 'activity',
+            'type' => 'activity_update'
+        ));
+    }
+    
+    if (!$activity_id) {
+        return new WP_Error('create_failed', 'Failed to create activity/comment', array('status' => 500));
+    }
+    
+    // Save media ID as activity meta for future reference
+    if ($media_id) {
+        bp_activity_update_meta($activity_id, 'sk_media_id', $media_id);
+        bp_activity_update_meta($activity_id, 'sk_media_url', $media_url);
+    }
+    
+    $activity = bp_activity_get_specific(array(
+        'activity_ids' => $activity_id,
+        'display_comments' => 'stream',
+        'show_hidden' => true
+    ));
     
     if (empty($activity['activities'])) {
-        return new WP_Error('not_found', 'Activity not found', array('status' => 404));
+        return new WP_Error('not_found', 'Activity not found after creation', array('status' => 404));
     }
     
     $act = $activity['activities'][0];
     
-    return rest_ensure_response(array(
+    $response_data = array(
         'id' => $act->id,
         'user_id' => $act->user_id,
         'content' => $act->content,
@@ -16852,8 +17243,18 @@ function sk_create_activity_post($request) {
         ),
         'favorited' => false,
         'favorite_count' => 0,
-        'comment_count' => 0
-    ));
+        'comment_count' => 0,
+        'media' => array()
+    );
+    
+    if ($media_url) {
+        $response_data['media'][] = array(
+            'id' => $media_id,
+            'url' => $media_url
+        );
+    }
+    
+    return rest_ensure_response($response_data);
 }
 
 /**
@@ -17164,4 +17565,81 @@ function sk_force_hide_thread_for_sender($thread_id, $args) {
             error_log("sk_force_hide_thread_for_sender: Forced hide thread $thread_id for sender $sender_id (Subject: $subject)");
         }
     }
+}
+
+/**
+ * Mobile App - Fetch Message Threads
+ */
+function sk_get_all_message_threads($request) {
+    if (!function_exists('buddypress') || !bp_is_active('messages')) {
+        return new WP_Error('no_buddypress', 'BuddyPress Messages not active.', array('status' => 500));
+    }
+
+    $current_user_id = get_current_user_id();
+    $threads = array();
+    $messages = array();
+    $users_map = array();
+
+    // Fetch inbox threads
+    if (bp_has_message_threads(array('user_id' => $current_user_id, 'max' => 50))) {
+        while (bp_message_threads()) {
+            bp_message_thread();
+            
+            $thread_id = bp_get_message_thread_id();
+            global $messages_template;
+            $thread_obj = $messages_template->thread;
+            
+            // 1. Process Participants & Users Map
+            $participants = array();
+            if (isset($thread_obj->recipients)) {
+                foreach ($thread_obj->recipients as $recipient) {
+                    $participants[] = array(
+                        'user_id' => $recipient->user_id,
+                        'name'    => bp_core_get_user_displayname($recipient->user_id)
+                    );
+                    
+                    // Add to users map for avatars (frontend expects this)
+                    if (!isset($users_map[$recipient->user_id])) {
+                        $users_map[$recipient->user_id] = array(
+                            'user_id' => $recipient->user_id,
+                            'name'    => bp_core_get_user_displayname($recipient->user_id),
+                            'avatar'  => bp_core_fetch_avatar(array('item_id' => $recipient->user_id, 'type' => 'thumb', 'html' => false))
+                        );
+                    }
+                }
+            }
+
+            // 2. Build Thread Object
+            $threads[] = array(
+                'thread_id'    => $thread_id,
+                'subject'      => bp_get_message_thread_subject(),
+                'lastMessage'  => bp_get_message_thread_excerpt(),
+                'unread'       => bp_get_message_thread_unread_count(),
+                'lastTime'     => strtotime(bp_get_message_thread_last_post_date()) * 1000,
+                'participants' => $participants
+            );
+
+            // 3. Build Last Message Object for the `messages` array
+            $last_message_id = $thread_obj->last_message_id;
+            if ($last_message_id) {
+                // We fake the full message structure using excerpt for the listing view
+                $messages[] = array(
+                    'id'         => $last_message_id,
+                    'thread_id'  => $thread_id,
+                    'message'    => bp_get_message_thread_excerpt(),
+                    'sender_id'  => bp_get_message_thread_last_post_date() ? $thread_obj->last_sender_id : $current_user_id, // approximation if we don't load the full message
+                    'created_at' => strtotime(bp_get_message_thread_last_post_date()) * 1000
+                );
+            }
+        }
+    }
+
+    // Convert users map to array
+    $users = array_values($users_map);
+
+    return array(
+        'threads'  => $threads,
+        'messages' => $messages,
+        'users'    => $users
+    );
 }
