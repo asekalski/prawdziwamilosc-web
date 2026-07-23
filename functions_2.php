@@ -9528,11 +9528,27 @@ function sk_add_shadow_ban_admin_fields($user) {
     if (!current_user_can('manage_options')) return;
     
     $is_hidden = get_user_meta($user->ID, 'sk_is_hidden', true) === '1';
+    $verification_status = get_user_meta($user->ID, 'sk_verification_status', true) ?: 'none';
+    $is_verified = $verification_status === 'verified';
+    $verification_photo = get_user_meta($user->ID, 'sk_verification_photo', true);
     ?>
-    <h3>Shadow Ban (Antigravity)</h3>
+    <h3>Ustawienia profilu (Weryfikacja i Ukrywanie)</h3>
     <table class="form-table">
         <tr>
-            <th><label for="sk_is_hidden">Ukryty użytkownik</label></th>
+            <th><label for="sk_verification_status">Profil zweryfikowany (✌️ gestem)</label></th>
+            <td>
+                <input type="checkbox" name="sk_verification_status" id="sk_verification_status" value="verified" <?php checked($is_verified); ?> />
+                <span class="description">Zaznacz, aby ręcznie zweryfikować tożsamość profilu użytkownika (pokaże się niebiesko-złoty znaczek weryfikacji).</span>
+                <?php if ($verification_photo) : ?>
+                    <div style="margin-top: 10px;">
+                        <strong>Przesłane zdjęcie z gestem:</strong><br/>
+                        <img src="<?php echo esc_url($verification_photo); ?>" style="max-width: 300px; border-radius: 8px; margin-top: 5px; display: block;" />
+                    </div>
+                <?php endif; ?>
+            </td>
+        </tr>
+        <tr>
+            <th><label for="sk_is_hidden">Ukryty użytkownik (Shadow Ban)</label></th>
             <td>
                 <input type="checkbox" name="sk_is_hidden" id="sk_is_hidden" value="1" <?php checked($is_hidden); ?> />
                 <span class="description">Jeśli zaznaczone, użytkownik nie będzie widoczny w wyszukiwarce, liście członków oraz nie będzie można do niego pisać.</span>
@@ -9545,7 +9561,7 @@ add_action('show_user_profile', 'sk_add_shadow_ban_admin_fields');
 add_action('edit_user_profile', 'sk_add_shadow_ban_admin_fields');
 
 /**
- * Shadow Ban: Save admin user profile field
+ * Shadow Ban & Verification: Save admin user profile fields
  */
 function sk_save_shadow_ban_admin_fields($user_id) {
     if (!current_user_can('manage_options')) return;
@@ -9554,6 +9570,15 @@ function sk_save_shadow_ban_admin_fields($user_id) {
         update_user_meta($user_id, 'sk_is_hidden', '1');
     } else {
         delete_user_meta($user_id, 'sk_is_hidden');
+    }
+
+    if (isset($_POST['sk_verification_status']) && $_POST['sk_verification_status'] === 'verified') {
+        update_user_meta($user_id, 'sk_verification_status', 'verified');
+    } else {
+        $current_status = get_user_meta($user_id, 'sk_verification_status', true);
+        if ($current_status === 'verified' || $current_status === 'pending') {
+            update_user_meta($user_id, 'sk_verification_status', 'none');
+        }
     }
 }
 add_action('personal_options_update', 'sk_save_shadow_ban_admin_fields');
