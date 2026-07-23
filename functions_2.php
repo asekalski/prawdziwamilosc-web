@@ -10169,6 +10169,8 @@ function sk_get_single_member_endpoint($request) {
         'last_activity' => sk_format_activity_status($last_activity, current_user_can('manage_options')),
         'onboarding_complete' => (bool) get_user_meta($user_id, 'app_onboarding_complete', true),
         'is_matched' => $is_matched,
+        'verification_status' => get_user_meta($user_id, 'sk_verification_status', true) ?: 'none',
+        'verification_photo' => get_user_meta($user_id, 'sk_verification_photo', true) ?: '',
         'chat_allowed_by_me' => (function($current_user_id, $target_user_id) {
             if (!$current_user_id) return false;
             $allowed_ids = get_user_meta($current_user_id, 'sk_allowed_chat_ids', true) ?: [];
@@ -18845,10 +18847,131 @@ function sk_admin_dashboard_endpoint() {
         ];
     }
     
+    // 4. Pending verifications
+    $verifications_query = $wpdb->get_results("
+        SELECT user_id, meta_value FROM {$wpdb->usermeta} 
+        WHERE meta_key = 'sk_verification_status' AND meta_value = 'pending'
+    ");
+    $pending_verifications = [];
+    foreach ($verifications_query as $v) {
+        $u = get_userdata($v->user_id);
+        if ($u) {
+            $avatar_url = '';
+            if (function_exists('bp_core_fetch_avatar')) {
+                $avatar_url = bp_core_fetch_avatar([
+                    'item_id' => $v->user_id,
+                    'html' => false
+                ]);
+            }
+            if (empty($avatar_url)) {
+                $avatar_url = get_user_meta($v->user_id, 'sk_avatar_url', true) ?: 'https://prawdziwamilosc.pl/default-avatar.png';
+            }
+            
+            $pending_verifications[] = [
+                'id' => $v->user_id,
+                'name' => $u->display_name,
+                'username' => $u->user_login,
+                'avatar_url' => $avatar_url,
+                'verification_photo' => get_user_meta($v->user_id, 'sk_verification_photo', true)
+            ];
+        }
+    }
+    
     return rest_ensure_response([
         'users' => $users,
         'matches' => $matches,
-        'messages' => $messages
+        'messages' => $messages,
+        'pending_verifications' => $pending_verifications
     ]);
 }
 
+
+
+// ========================================
+// User Photo Verification API
+// ========================================
+add_action('rest_api_init', function () {
+    // Submit verification photo
+    register_rest_route('sk/v1', '/verification/submit', [
+        'methods' => 'POST',
+        'callback' => 'sk_verification_submit_endpoint',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
+
+    // Review verification request (Admin only)
+    register_rest_route('sk/v1', '/verification/review', [
+        'methods' => 'POST',
+        'callback' => 'sk_verification_review_endpoint',
+        'permission_callback' => function() {
+            return current_user_can('manage_options');
+        }
+    ]);
+});
+
+function sk_verification_submit_endpoint($request) {
+    $user_id = get_current_user_id();
+    if (!$user_id) {
+        return new WP_Error('not_logged_in', 'Musisz być zalogowany', ['status' => 401]);
+    }
+
+    $files = $request->get_file_params();
+    if (empty($files['photo'])) {
+        return new WP_Error('missing_photo', 'Brak pliku zdjęcia weryfikacyjnego', ['status' => 400]);
+    }
+
+    $file = $files['photo'];
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        return new WP_Error('upload_error', 'Błąd przesyłania pliku', ['status' => 500]);
+    }
+
+    if (!function_exists('wp_handle_upload')) {
+        require_once(ABSPATH . 'wp-admin/includes/file.php');
+    }
+
+    $upload_overrides = ['test_form' => false];
+    $movefile = wp_handle_upload($file, $upload_overrides);
+
+    if ($movefile && !isset($movefile['error'])) {
+        $photo_url = $movefile['url'];
+        
+        update_user_meta($user_id, 'sk_verification_photo', $photo_url);
+        update_user_meta($user_id, 'sk_verification_status', 'pending');
+        
+        return rest_ensure_response([
+            'success' => true,
+            'message' => 'Zdjęcie weryfikacyjne zostało pomyślnie przesłane. Oczekuj na weryfikację przez administratora.',
+            'photo_url' => $photo_url,
+            'status' => 'pending'
+        ]);
+    } else {
+        return new WP_Error('upload_error', $movefile['error'] ?: 'Nie udało się zapisać pliku', ['status' => 500]);
+    }
+}
+
+function sk_verification_review_endpoint($request) {
+    $target_user_id = intval($request->get_param('user_id'));
+    $action = sanitize_text_field($request->get_param('action')); // 'approve' lub 'reject'
+    
+    if (!$target_user_id) {
+        return new WP_Error('missing_user', 'Brak ID użytkownika', ['status' => 400]);
+    }
+
+    if ($action !== 'approve' && $action !== 'reject') {
+        return new WP_Error('invalid_action', 'Nieprawidłowa akcja (dozwolone approve lub reject)', ['status' => 400]);
+    }
+
+    if ($action === 'approve') {
+        update_user_meta($target_user_id, 'sk_verification_status', 'verified');
+    } else {
+        update_user_meta($target_user_id, 'sk_verification_status', 'rejected');
+        delete_user_meta($target_user_id, 'sk_verification_photo');
+    }
+
+    return rest_ensure_response([
+        'success' => true,
+        'message' => 'Zweryfikowano pomyślnie',
+        'status' => $action === 'approve' ? 'verified' : 'rejected'
+    ]);
+}
