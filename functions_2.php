@@ -7377,6 +7377,57 @@ function sk_is_mutual_match($user_id_1, $user_id_2)
     return false;
 }
 
+function sk_is_disposable_email($email) {
+    $domain = strtolower(substr(strrchr($email, "@"), 1));
+    
+    $disposable_domains = [
+        'mailinator.com', '10minutemail.com', 'guerrillamail.com', 'tempmail.com', 
+        'dispostable.com', 'yopmail.com', 'trashmail.com', 'getairmail.com', 
+        'sharklasers.com', 'guerrillamailblock.com', 'guerrillamail.net', 
+        'guerrillamail.org', 'guerrillamail.biz', 'spam4.me', 'grr.la', 
+        'pokemail.net', 'temp-mail.org', 'tempmailaddress.com', 'throwawaymail.com', 
+        'maildrop.cc', 'mailnesia.com', 'mailcatch.com', 'moakt.com', 
+        'disposable.com', 'disposablemail.com', 'tempmail.net', 'crazymailing.com',
+        'generator.email', 'tempmailo.com', 'envelope.ee', '10minutemail.co.za',
+        '10minutemail.net', '10minutemail.org', 'fakeinbox.com', 'mintemail.com'
+    ];
+    
+    return in_array($domain, $disposable_domains, true);
+}
+
+function sk_check_spam_message($sender_id, $content) {
+    if (user_can($sender_id, 'manage_options')) {
+        return false;
+    }
+    
+    if (function_exists('sk_is_premium_user') && sk_is_premium_user($sender_id)) {
+        return false;
+    }
+    
+    // Links & domains check
+    $has_link = preg_match('/https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9.-]+\.(pl|com|net|org|xyz|info|tk|me|de|uk|ru|site|online|space|link|top|app)/i', $content);
+    
+    // Phone numbers check (6 to 9 digits, optional separators)
+    $has_phone = preg_match('/(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{3}/', $content);
+    
+    // Messenger keywords check
+    $keywords = ['whatsapp', 'telegram', 'snapchat', 'instagram', 'snap', 'insta', 'messenger', 'viber', 'wa.me', 't.me', 'kik'];
+    $has_keyword = false;
+    foreach ($keywords as $kw) {
+        if (stripos($content, $kw) !== false) {
+            $has_keyword = true;
+            break;
+        }
+    }
+    
+    if ($has_link || $has_phone || $has_keyword) {
+        error_log("SK SPAM BLOCKED: User ID $sender_id attempted to send spam: \"$content\"");
+        return true;
+    }
+    
+    return false;
+}
+
 function pm_strict_match_validation($errors, $recipients)
 {
     try {
@@ -7390,6 +7441,21 @@ function pm_strict_match_validation($errors, $recipients)
 
         // If no sender (not logged in), abort
         if (!$sender_id) {
+            return $errors;
+        }
+
+        // Spam content validation
+        $content = $_POST['content'] ?? $_POST['message'] ?? '';
+        if (empty($content) && stripos($_SERVER['CONTENT_TYPE'] ?? '', 'application/json') !== false) {
+            $json = @file_get_contents('php://input');
+            $data = json_decode($json, true);
+            $content = $data['message'] ?? $data['content'] ?? '';
+        }
+        if (!empty($content) && sk_check_spam_message($sender_id, $content)) {
+            $errors->add(
+                'spam_error',
+                __('Twoja wiadomość zawiera niedozwolone dane kontaktowe lub linki. Jako użytkownik bez Premium nie możesz ich przesyłać.', 'buddypress')
+            );
             return $errors;
         }
 
@@ -7557,6 +7623,22 @@ function pm_bm_restrict_new_thread_creation(&$args, &$errors) {
 add_filter('better_messages_can_send_message', 'pm_bm_can_send_message_filter', 10, 3);
 function pm_bm_can_send_message_filter($allowed, $user_id, $thread_id) {
     if (!$allowed) {
+        return false;
+    }
+
+    // SPAM check
+    $content = $_POST['message'] ?? $_POST['content'] ?? '';
+    if (empty($content) && stripos($_SERVER['CONTENT_TYPE'] ?? '', 'application/json') !== false) {
+        $json = @file_get_contents('php://input');
+        $data = json_decode($json, true);
+        $content = $data['message'] ?? $data['content'] ?? '';
+    }
+    if (!empty($content) && sk_check_spam_message($user_id, $content)) {
+        global $bp_better_messages_restrict_send_message;
+        if (!is_array($bp_better_messages_restrict_send_message)) {
+            $bp_better_messages_restrict_send_message = [];
+        }
+        $bp_better_messages_restrict_send_message['spam_error'] = 'Twoja wiadomość zawiera niedozwolone dane kontaktowe lub linki (dostępne tylko dla Premium).';
         return false;
     }
 
@@ -11386,6 +11468,10 @@ function sk_register_user($request) {
         return new WP_Error('invalid_email', 'Nieprawidłowy adres email', ['status' => 400]);
     }
     
+    if (sk_is_disposable_email($email)) {
+        return new WP_Error('disposable_email', 'Rejestracja z tymczasowych adresów e-mail jest zablokowana.', ['status' => 400]);
+    }
+    
     if (username_exists($username)) {
         return new WP_Error('username_exists', 'Nazwa użytkownika już istnieje', ['status' => 400]);
     }
@@ -12193,6 +12279,10 @@ function sk_register_user_with_avatar($request) {
     
     if (!is_email($email)) {
         return new WP_Error('invalid_email', 'Nieprawidłowy adres email', ['status' => 400]);
+    }
+    
+    if (sk_is_disposable_email($email)) {
+        return new WP_Error('disposable_email', 'Rejestracja z tymczasowych adresów e-mail jest zablokowana.', ['status' => 400]);
     }
     
     if (username_exists($username)) {
