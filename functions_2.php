@@ -9814,7 +9814,9 @@ function sk_get_members_endpoint($request) {
                 'numerology' => isset($x_data[6722]) ? $x_data[6722] : ($birth_date ? sk_calculate_life_path_number($birth_date) : null),
                 'zodiac' => $zodiac_val,
                 'match_percentage' => sk_get_bp_match_percentage($current_user_id, $u_id),
-                'xprofile' => $xprofile_mock
+                'xprofile' => $xprofile_mock,
+                'verification_status' => get_user_meta($u_id, 'sk_verification_status', true) ?: 'none',
+                'verification_photo' => get_user_meta($u_id, 'sk_verification_photo', true) ?: ''
             ];
 
         }
