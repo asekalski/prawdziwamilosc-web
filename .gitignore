@@ -1,2 +1,6 @@
 full_debug*.log
 debug_*.php
+.DS_Store
+*.key
+*.csr
+broadcast.php
