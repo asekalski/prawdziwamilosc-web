@@ -2,6 +2,13 @@
 add_action('init', function() {
     error_log('functions_2.php init hook fired. Request URI: ' . $_SERVER['REQUEST_URI']);
 });
+
+/**
+ * Add Smart App Banner for iOS users
+ */
+add_action('wp_head', function() {
+    echo '<meta name="apple-itunes-app" content="app-id=6758733087">';
+});
 /**
  * Helper function to check if the current page is the dashboard or front page
  * 
@@ -1944,7 +1951,10 @@ function load_users_grid_with_preferences_ajax()
     if (!is_array($blocked_users_list))
         $blocked_users_list = [];
 
-    $exclude_ids = array_unique(array_merge([1, $current_user_id], $blocked_users_list));
+    // Shadow Ban: Pobieranie ukrytych użytkowników
+    $hidden_users_list = function_exists('sk_get_hidden_user_ids') ? sk_get_hidden_user_ids() : [];
+
+    $exclude_ids = array_unique(array_merge([1, $current_user_id], $blocked_users_list, $hidden_users_list));
 
     $seeking_preference = trim(bp_get_profile_field_data(['field' => 338, 'user_id' => $current_user_id]));
     $target_gender = '';
@@ -3189,6 +3199,35 @@ function sk_toggle_like_user_ajax()
     // Determine if this is a match
     $is_match = $is_mutual_match_possible && $new_status === 'liked';
     
+    // Wyślij e-mail powiadomienie o polubieniu/dopasowaniu
+    if ($new_status === 'liked') {
+        $liked_user = get_userdata($liked_id);
+        $liker_user = get_userdata($liker_id);
+        if ($liked_user && $liker_user) {
+            $to = $liked_user->user_email;
+            $liker_name = $liker_user->display_name;
+            
+            if ($is_match) {
+                $subject = 'Masz nową parę na Prawdziwa Miłość!';
+                $message = "Cześć " . $liked_user->display_name . ",\n\n";
+                $message .= "Mamy świetną wiadomość! Użytkownik " . $liker_name . " również Cię polubił(a). Masz nową parę!\n\n";
+                $message .= "Zaloguj się do aplikacji, aby rozpocząć rozmowę:\n";
+                $message .= "https://prawdziwamilosc.pl\n\n";
+                $message .= "Życzymy udanej rozmowy,\nZespół Prawdziwa Miłość";
+            } else {
+                $subject = 'Ktoś Cię polubił na Prawdziwa Miłość!';
+                $message = "Cześć " . $liked_user->display_name . ",\n\n";
+                $message .= "Ktoś okazał Ci zainteresowanie! Użytkownik " . $liker_name . " polubił Twój profil.\n\n";
+                $message .= "Zaloguj się do aplikacji, aby sprawdzić profil:\n";
+                $message .= "https://prawdziwamilosc.pl\n\n";
+                $message .= "Życzymy miłego dnia,\nZespół Prawdziwa Miłość";
+            }
+            
+            $mail_sent = wp_mail($to, $subject, $message);
+            error_log("SK DEBUG: sk_toggle_like_user_ajax - email to $to sent status: " . ($mail_sent ? 'SUCCESS' : 'FAILED'));
+        }
+    }
+
     // Build response
     $response_data = [
         'status' => $new_status,
@@ -4522,6 +4561,18 @@ function hide_header_on_registration_page() {
 }
 add_action('wp_head', 'hide_header_on_registration_page', 9999);
 
+/**
+ * App Store Download Button Shortcode/Helper
+ */
+function pm_get_app_store_button() {
+    return '
+    <div class="pm-app-store-button-container" style="text-align: center; margin: 20px 0;">
+        <a href="https://apps.apple.com/app/id6758733087" target="_blank" style="display: inline-block;">
+            <img src="https://prawdziwamilosc.pl/wp-content/uploads/2024/03/app-store-badge.png" alt="Pobierz w App Store" style="height: 45px; border-radius: 8px;">
+        </a>
+    </div>';
+}
+
 // === NAPRAW STOPKĘ - EKSTRA MOCNE STYLE ===
 
 function force_footer_dark_background()
@@ -4958,6 +5009,7 @@ add_action('wp_head', 'pm_fix_mobile_nav_tabs_visibility', 100000);
 function rejestracja_krok1_shortcode()
 {
     ob_start();
+    echo pm_get_app_store_button();
 
     // === TWÓJ KOD PHP TUTAJ ===
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -5782,6 +5834,8 @@ function wyswietl_formularz_logowania_shortcode()
         $current_user = wp_get_current_user();
         return '<div class="logged-in-msg" style="color: white; padding: 10px;">Cześć ' . esc_html($current_user->display_name) . '! Jesteś już zalogowany/a.</div>';
     }
+
+    echo pm_get_app_store_button();
 
     // Argumenty formularza
     $args = array(
@@ -7446,6 +7500,134 @@ function pm_strict_match_validation($errors, $recipients)
 add_filter('bp_messages_validate_send', 'pm_strict_match_validation', 10, 2);
 
 /**
+ * Better Messages validation for new thread creation.
+ */
+add_action('better_messages_before_new_thread', 'pm_bm_restrict_new_thread_creation', 10, 2);
+function pm_bm_restrict_new_thread_creation(&$args, &$errors) {
+    try {
+        $sender_id = isset($args['sender_id']) ? intval($args['sender_id']) : get_current_user_id();
+        if (!$sender_id) {
+            return;
+        }
+
+        // Admin bypass
+        if (user_can($sender_id, 'manage_options')) {
+            return;
+        }
+
+        // Global override bypass
+        if (defined('SK_BYPASS_MATCH_CHECK') && SK_BYPASS_MATCH_CHECK === true) {
+            return;
+        }
+
+        $recipients = isset($args['recipients']) ? $args['recipients'] : [];
+        if (empty($recipients)) {
+            return;
+        }
+
+        foreach ($recipients as $recipient) {
+            $recipient_id = intval(is_object($recipient) && isset($recipient->user_id) ? $recipient->user_id : $recipient);
+            if (!$recipient_id || $recipient_id === $sender_id) {
+                continue;
+            }
+
+            // 1. Sprawdź Match (Wzajemne polubienie)
+            if (function_exists('sk_is_mutual_match') && sk_is_mutual_match($sender_id, $recipient_id)) {
+                continue;
+            }
+
+            // 2. Sprawdź czy odbiorca wyraził zgodę (Allow)
+            $allowed_by_recipient = get_user_meta($recipient_id, 'sk_allowed_chat_ids', true) ?: [];
+            if (is_array($allowed_by_recipient) && in_array($sender_id, $allowed_by_recipient)) {
+                continue;
+            }
+
+            // Zablokuj
+            $errors[] = 'Nie możesz rozpocząć rozmowy z tym użytkownikiem. Wymagane jest wzajemne polubienie (Match) lub zgoda na rozmowę.';
+            return;
+        }
+    } catch (Throwable $t) {
+        error_log("CRITICAL ERROR in pm_bm_restrict_new_thread_creation: " . $t->getMessage());
+    }
+}
+
+/**
+ * Better Messages validation for sending messages in general.
+ */
+add_filter('better_messages_can_send_message', 'pm_bm_can_send_message_filter', 10, 3);
+function pm_bm_can_send_message_filter($allowed, $user_id, $thread_id) {
+    if (!$allowed) {
+        return false;
+    }
+
+    try {
+        $user_id = intval($user_id);
+        if (!$user_id) {
+            return $allowed;
+        }
+
+        // Admin bypass
+        if (user_can($user_id, 'manage_options')) {
+            return $allowed;
+        }
+
+        // Global override bypass
+        if (defined('SK_BYPASS_MATCH_CHECK') && SK_BYPASS_MATCH_CHECK === true) {
+            return $allowed;
+        }
+
+        // Pobierz odbiorców wątku
+        if (class_exists('Better_Messages') && function_exists('Better_Messages')) {
+            $thread_info = Better_Messages()->functions->get_thread($thread_id);
+            if ($thread_info && isset($thread_info->recipients)) {
+                // Jeśli wątek już istnieje i ma wiadomości, pozwalamy na kontynuację (to jest reply)
+                global $wpdb;
+                $messages_count = $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(*) FROM {$wpdb->prefix}bm_messages WHERE thread_id = %d",
+                    $thread_id
+                ));
+                
+                // Jeśli to jest istniejąca rozmowa (ma już wiadomości), pozwalamy pisać
+                if ($messages_count > 0) {
+                    return $allowed;
+                }
+
+                // W przeciwnym razie sprawdzamy dopasowanie
+                foreach ($thread_info->recipients as $recipient) {
+                    $recipient_id = intval(isset($recipient->user_id) ? $recipient->user_id : $recipient);
+                    if (!$recipient_id || $recipient_id === $user_id) {
+                        continue;
+                    }
+
+                    // 1. Sprawdź Match
+                    if (function_exists('sk_is_mutual_match') && sk_is_mutual_match($user_id, $recipient_id)) {
+                        continue;
+                    }
+
+                    // 2. Sprawdź czy odbiorca wyraził zgodę
+                    $allowed_by_recipient = get_user_meta($recipient_id, 'sk_allowed_chat_ids', true) ?: [];
+                    if (is_array($allowed_by_recipient) && in_array($user_id, $allowed_by_recipient)) {
+                        continue;
+                    }
+
+                    // Zablokuj
+                    global $bp_better_messages_restrict_send_message;
+                    if (!is_array($bp_better_messages_restrict_send_message)) {
+                        $bp_better_messages_restrict_send_message = [];
+                    }
+                    $bp_better_messages_restrict_send_message['no_match_error'] = 'Nie możesz pisać do tego użytkownika bez wzajemnego polubienia lub zgody.';
+                    return false;
+                }
+            }
+        }
+    } catch (Throwable $t) {
+        error_log("CRITICAL ERROR in pm_bm_can_send_message_filter: " . $t->getMessage());
+    }
+
+    return $allowed;
+}
+
+/**
  * UKRYCIE PRZYCISKU "WYŚLIJ WIADOMOŚĆ" NA PROFILU (TYLKO WWW)
  */
 function pm_hide_message_button_no_match()
@@ -8137,6 +8319,48 @@ function sk_get_batch_last_activity($user_ids) {
  * Format activity status for privacy
  * Admins see full detail, users see "fuzzy" buckets
  */
+function sk_get_time_since($timestamp) {
+    $diff = time() - $timestamp;
+    if ($diff < 60) {
+        return 'przed chwilą';
+    }
+    
+    $minutes = round($diff / 60);
+    if ($minutes < 60) {
+        if ($minutes == 1) return '1 minutę temu';
+        if (in_array($minutes % 10, [2, 3, 4]) && !in_array($minutes % 100, [12, 13, 14])) {
+            return "$minutes minuty temu";
+        }
+        return "$minutes minut temu";
+    }
+    
+    $hours = round($diff / 3600);
+    if ($hours < 24) {
+        if ($hours == 1) return '1 godzinę temu';
+        if (in_array($hours % 10, [2, 3, 4]) && !in_array($hours % 100, [12, 13, 14])) {
+            return "$hours godziny temu";
+        }
+        return "$hours godzin temu";
+    }
+    
+    $days = round($diff / 86400);
+    if ($days < 30) {
+        if ($days == 1) return '1 dzień temu';
+        return "$days dni temu";
+    }
+    
+    $months = round($days / 30);
+    if ($months < 12) {
+        if ($months == 1) return '1 miesiąc temu';
+        if (in_array($months % 10, [2, 3, 4]) && !in_array($months % 100, [12, 13, 14])) {
+            return "$months miesiące temu";
+        }
+        return "$months miesięcy temu";
+    }
+    
+    return 'dawno temu';
+}
+
 function sk_format_activity_status($last_activity_date, $is_admin = false) {
     if (empty($last_activity_date)) {
         return 'Aktywność nieznana';
@@ -8147,20 +8371,14 @@ function sk_format_activity_status($last_activity_date, $is_admin = false) {
         return 'Aktywność nieznana';
     }
 
-    if ($is_admin) {
-        // Detailed status for admins
-        return 'Aktywny/a ' . bp_core_time_since($last_active_timestamp);
-    }
-
     $diff = time() - $last_active_timestamp;
 
-    if ($diff < 3600) {
+    // Jeśli użytkownik był aktywny w ciągu ostatnich 5 minut, oznaczamy go jako dostępnego teraz
+    if ($diff < 300) {
         return 'Dostępny/a teraz';
-    } elseif ($diff < 86400) {
-        return 'Dzisiaj';
-    } else {
-        return 'Niedawno';
     }
+
+    return 'Aktywny/a ' . sk_get_time_since($last_active_timestamp);
 }
 
 /**
@@ -9712,7 +9930,7 @@ function sk_get_single_member_endpoint($request) {
     }
     
     // Get last activity
-    $last_activity = bp_core_get_last_activity($user_id, date("Y-m-d H:i:s"));
+    $last_activity = bp_core_get_last_activity($user_id, "");
 
     
 
@@ -9855,13 +10073,13 @@ function sk_get_single_member_endpoint($request) {
         'link' => bp_core_get_user_domain($user_id),
         'avatar' => $avatar_full,
         'avatar_urls' => [
-            'full' => $avatar_full,
-            'thumb' => $avatar_thumb
+            'full' => $avatar_full ? $avatar_full . '?t=' . time() : null,
+            'thumb' => $avatar_thumb ? $avatar_thumb . '?t=' . time() : null
         ],
         'hires_avatar' => [
-            'full' => $avatar_full,
-            'large' => $avatar_full,
-            'thumb' => $avatar_thumb
+            'full' => $avatar_full ? $avatar_full . '?t=' . time() : null,
+            'large' => $avatar_full ? $avatar_full . '?t=' . time() : null,
+            'thumb' => $avatar_thumb ? $avatar_thumb . '?t=' . time() : null
         ],
         'xprofile' => [
             'groups' => $clean_groups
@@ -9880,15 +10098,21 @@ function sk_get_single_member_endpoint($request) {
             $photo_ids = array_unique($photo_ids); // Deduplicate IDs
             $gallery = [];
             $seen_urls = [];
+            
+            // Generate a server-side timestamp for cache busting
+            $cb = '?t=' . time();
+
             foreach ($photo_ids as $pid) {
                 if ($pid) {
                     $url = wp_get_attachment_image_url($pid, 'medium_large');
+                    $full_url = wp_get_attachment_image_url($pid, 'full');
+                    
                     if ($url && !in_array($url, $seen_urls)) {
                         $seen_urls[] = $url;
                         $gallery[] = [
                             'id' => $pid,
-                            'url' => $url,
-                            'full' => wp_get_attachment_image_url($pid, 'full')
+                            'url' => $url . $cb,
+                            'full' => $full_url ? $full_url . $cb : $url . $cb
                         ];
                     }
                 }
@@ -10541,13 +10765,40 @@ function sk_toggle_like_endpoint($request) {
     update_user_meta($liker_id, 'sk_user_likes', array_values($my_likes));
     update_user_meta($liked_id, 'sk_liked_by_users', array_values($liked_by));
     
-    // Clear cache
-    delete_transient('users_grid_cache_' . $liker_id);
-    delete_transient('users_grid_cache_' . $liked_id);
+    $is_match = $is_mutual_match_possible && $new_status === 'liked';
+
+    // Wyślij e-mail powiadomienie o polubieniu/dopasowaniu
+    if ($new_status === 'liked') {
+        $liked_user = get_userdata($liked_id);
+        $liker_user = get_userdata($liker_id);
+        if ($liked_user && $liker_user) {
+            $to = $liked_user->user_email;
+            $liker_name = $liker_user->display_name;
+            
+            if ($is_match) {
+                $subject = 'Masz nową parę na Prawdziwa Miłość!';
+                $message = "Cześć " . $liked_user->display_name . ",\n\n";
+                $message .= "Mamy świetną wiadomość! Użytkownik " . $liker_name . " również Cię polubił(a). Masz nową parę!\n\n";
+                $message .= "Zaloguj się do aplikacji, aby rozpocząć rozmowę:\n";
+                $message .= "https://prawdziwamilosc.pl\n\n";
+                $message .= "Życzymy udanej rozmowy,\nZespół Prawdziwa Miłość";
+            } else {
+                $subject = 'Ktoś Cię polubił na Prawdziwa Miłość!';
+                $message = "Cześć " . $liked_user->display_name . ",\n\n";
+                $message .= "Ktoś okazał Ci zainteresowanie! Użytkownik " . $liker_name . " polubił Twój profil.\n\n";
+                $message .= "Zaloguj się do aplikacji, aby sprawdzić profil:\n";
+                $message .= "https://prawdziwamilosc.pl\n\n";
+                $message .= "Życzymy miłego dnia,\nZespół Prawdziwa Miłość";
+            }
+            
+            $mail_sent = wp_mail($to, $subject, $message);
+            error_log("SK DEBUG: sk_toggle_like_endpoint - email to $to sent status: " . ($mail_sent ? 'SUCCESS' : 'FAILED'));
+        }
+    }
     
     return rest_ensure_response([
         'status' => $new_status,
-        'is_match' => $is_mutual_match_possible && $new_status === 'liked'
+        'is_match' => $is_match
     ]);
 }
 
@@ -10570,7 +10821,83 @@ add_action('rest_api_init', function () {
             return is_user_logged_in();
         }
     ]);
+
+    register_rest_route('sk/v1', '/thread/(?P<id>\d+)/read-status', [
+        'methods' => 'GET',
+        'callback' => 'sk_get_thread_read_status',
+        'permission_callback' => function() {
+            return is_user_logged_in();
+        }
+    ]);
 });
+
+/**
+ * Returns the unread count of the OTHER participant in a thread.
+ * This tells the current user whether their messages have been read.
+ * If other_unread = 0, all messages were read by the other person.
+ */
+function sk_get_thread_read_status($request) {
+    global $wpdb;
+    $thread_id = intval($request->get_param('id'));
+    $current_user_id = get_current_user_id();
+
+    if (!$thread_id) {
+        return new WP_Error('missing_param', 'Thread ID is required', ['status' => 400]);
+    }
+
+    $result = [
+        'thread_id' => $thread_id,
+        'other_unread' => null,
+        'source' => 'none'
+    ];
+
+    // 1. Try Better Messages table first
+    $bm_table = $wpdb->prefix . 'bm_message_recipients';
+    $has_bm = $wpdb->get_var("SHOW TABLES LIKE '$bm_table'") == $bm_table;
+    
+    if ($has_bm) {
+        // Find the unread column name
+        $bm_col = $wpdb->get_var("SHOW COLUMNS FROM {$bm_table} LIKE 'unread_count'") ? 'unread_count' : ($wpdb->get_var("SHOW COLUMNS FROM {$bm_table} LIKE 'unread'") ? 'unread' : '');
+        
+        if ($bm_col) {
+            $other_unread = $wpdb->get_var($wpdb->prepare(
+                "SELECT {$bm_col} FROM {$bm_table} WHERE thread_id = %d AND user_id != %d LIMIT 1",
+                $thread_id, $current_user_id
+            ));
+            
+            if ($other_unread !== null) {
+                $result['other_unread'] = (int)$other_unread;
+                $result['source'] = 'better_messages';
+            }
+        }
+    }
+
+    // 2. Fallback to BuddyPress table
+    if ($result['other_unread'] === null) {
+        $bp_table = $wpdb->prefix . 'bp_messages_recipients';
+        $has_bp = $wpdb->get_var("SHOW TABLES LIKE '$bp_table'") == $bp_table;
+        
+        if ($has_bp) {
+            $other_unread = $wpdb->get_var($wpdb->prepare(
+                "SELECT unread_count FROM {$bp_table} WHERE thread_id = %d AND user_id != %d LIMIT 1",
+                $thread_id, $current_user_id
+            ));
+            
+            if ($other_unread !== null) {
+                $result['other_unread'] = (int)$other_unread;
+                $result['source'] = 'buddypress';
+            }
+        }
+    }
+
+    // Default to 0 if nothing found (assume read)
+    if ($result['other_unread'] === null) {
+        $result['other_unread'] = 0;
+        $result['source'] = 'default';
+    }
+
+    return rest_ensure_response($result);
+}
 
 function sk_get_unread_count_endpoint($request = null, $skip_reset = false) {
     global $wpdb;
@@ -11160,7 +11487,383 @@ add_action('rest_api_init', function () {
             return is_user_logged_in();
         }
     ]);
+
+    register_rest_route('sk/v1', '/google-login', [
+        'methods' => 'POST',
+        'callback' => 'sk_google_login_handler',
+        'permission_callback' => '__return_true',
+    ]);
+
+    register_rest_route('sk/v1', '/apple-login', [
+        'methods' => 'POST',
+        'callback' => 'sk_apple_login_handler',
+        'permission_callback' => '__return_true',
+    ]);
 });
+
+/**
+ * Helper to generate a unique human-readable username
+ */
+function sk_generate_unique_username($first_name, $last_name, $email, $prefix = '') {
+    $base_name = '';
+    
+    if (!empty($first_name) || !empty($last_name)) {
+        $base_name = sanitize_title(trim($first_name . ' ' . $last_name));
+    }
+    
+    // If name is totally invalid or empty, use email prefix
+    if (empty($base_name) && !empty($email)) {
+        $parts = explode('@', $email);
+        $base_name = sanitize_title($parts[0]);
+    }
+
+    // Last resort fallback
+    if (empty($base_name)) {
+        $base_name = $prefix . '_' . wp_generate_password(6, false);
+    }
+    
+    // Make it a clean, continuous string (buddypress likes it simple)
+    $base_name = str_replace('-', '', $base_name);
+
+    $username = $base_name;
+    $counter = 1;
+
+    // Check availability
+    while (username_exists($username)) {
+        $username = $base_name . $counter;
+        $counter++;
+    }
+
+    return $username;
+}
+
+/**
+ * Handle Google Login from the App
+ */
+function sk_google_login_handler($request) {
+    $id_token = $request->get_param('id_token');
+    
+    if (empty($id_token)) {
+        return new WP_Error('missing_token', 'Brak tokenu Google', ['status' => 400]);
+    }
+
+    // 1. Verify Token with Google
+    $verify_url = 'https://oauth2.googleapis.com/tokeninfo?id_token=' . $id_token;
+    $response = wp_remote_get($verify_url);
+
+    if (is_wp_error($response)) {
+        return new WP_Error('google_error', 'Nie udało się połączyć z Google', ['status' => 500]);
+    }
+
+    $body = json_decode(wp_remote_retrieve_body($response), true);
+
+    if (empty($body) || isset($body['error'])) {
+        return new WP_Error('invalid_google_token', 'Nieprawidłowy token Google', ['status' => 401]);
+    }
+
+    // 1b. SECURITY: Verify Audience (Client ID)
+    // Only allow tokens issued specifically for our iOS app
+    $allowed_aud = [
+        '203973175336-93sf5dgi7gmdket8hn7t0a7tmf0trmc9.apps.googleusercontent.com', // OLD iOS Client ID
+        '203973175336-1qatql0ahjqe68b9o81pnnekcl9jsst1.apps.googleusercontent.com', // OLD Web Client ID
+        '422700251567-j1vnrcrqkfbshu1bukfs05gailpk012k.apps.googleusercontent.com', // NEW Web Client ID (PrawdziwaMilosc)
+        '422700251567-n8s55df8i522i512f4a9oqcv6p69dlv0.apps.googleusercontent.com', // NEW Android Client ID
+        '422700251567-i7ivt9jac5jhkbk52eqec3c1jglpl06g.apps.googleusercontent.com', // NEW iOS Client ID
+    ];
+
+    if (!in_array($body['aud'], $allowed_aud)) {
+        return new WP_Error('unauthorized_client', 'Ten token nie został wydany dla tej aplikacji.', ['status' => 403]);
+    }
+
+    // Google data
+    $email = sanitize_email($body['email']);
+    $google_id = sanitize_text_field($body['sub']);
+    $full_name = sanitize_text_field($body['name']);
+    $first_name = sanitize_text_field($body['given_name']);
+    $last_name = sanitize_text_field($body['family_name']);
+    $picture = esc_url_raw($body['picture']);
+
+    // 2. Find or Create User
+    // First, check by Google ID meta
+    $user_query = new WP_User_Query([
+        'meta_key' => 'sk_google_user_id',
+        'meta_value' => $google_id,
+        'number' => 1
+    ]);
+    
+    $user = null;
+    $is_new_user = false;
+
+    if (!empty($user_query->get_results())) {
+        $user = $user_query->get_results()[0];
+    } else {
+        // Not found by Google ID, try by email
+        $user = get_user_by('email', $email);
+        
+        if ($user) {
+            // User exists, but doesn't have the Google ID linked - link it now
+            update_user_meta($user->ID, 'sk_google_user_id', $google_id);
+        } else {
+            // New User - Create!
+            $is_new_user = true;
+            $username = sk_generate_unique_username($first_name, $last_name, $email, 'google');
+            $random_password = wp_generate_password(12, true);
+            
+            $user_id = wp_create_user($username, $random_password, $email);
+            
+            if (is_wp_error($user_id)) {
+                return new WP_Error('user_creation_failed', $user_id->get_error_message(), ['status' => 500]);
+            }
+
+            // Wyślij email z powiadomieniem do administratora
+            wp_new_user_notification($user_id, null, 'admin');
+            
+            $user = get_userdata($user_id);
+            update_user_meta($user_id, 'sk_google_user_id', $google_id);
+            update_user_meta($user_id, 'first_name', $first_name);
+            update_user_meta($user_id, 'last_name', $last_name);
+            
+            // Sync with BuddyPress Full Name (Field ID 1) - ONLY FIRST NAME FOR PRIVACY
+            if (function_exists('xprofile_set_field_data')) {
+                $display_name = !empty($first_name) ? $first_name : $full_name;
+                xprofile_set_field_data(1, $user_id, $display_name);
+                wp_update_user(['ID' => $user_id, 'display_name' => $display_name]);
+            }
+
+            // DO NOT set app_onboarding_complete to true - force onboarding for new users
+            update_user_meta($user_id, 'app_onboarding_complete', false);
+
+            // Download and set Google Profile Picture
+            if (!empty($picture)) {
+                require_once(ABSPATH . 'wp-admin/includes/file.php');
+                require_once(ABSPATH . 'wp-admin/includes/media.php');
+                require_once(ABSPATH . 'wp-admin/includes/image.php');
+                
+                $attach_id = media_sideload_image($picture, 0, null, 'id');
+                if (!is_wp_error($attach_id)) {
+                    update_user_meta($user_id, 'user_avatar_id', $attach_id);
+                    update_user_meta($user_id, 'user_profile_photos_ids', [$attach_id]);
+                    
+                    // Assign post author
+                    wp_update_post([
+                        'ID' => $attach_id,
+                        'post_author' => $user_id
+                    ]);
+                }
+            }
+        }
+    }
+
+    // 3. Generate JWT Token
+    $token = '';
+    // Check if JWT Auth plugin is active and we can use its logic
+    if (class_exists('T_JWT_Auth') || class_exists('Jwt_Auth_Public')) {
+        // T_JWT_Auth usually provides the token generation
+        // But since we are in a custom endpoint, we might have to manually sign it if we can't find the class method
+        // Standard JWT-Auth plugin doesn't have a simple static method for this many times.
+        // Let's try to find if we can manually generate it using the same secret.
+    }
+
+    // Robust Fallback: Manual JWT Generation matching standard jwt-auth expectations
+    // Standard payload: iss, iat, nbf, exp, data { user { id } }
+    if (defined('JWT_AUTH_SECRET_KEY')) {
+        $secret = JWT_AUTH_SECRET_KEY;
+        $issued_at = time();
+        $not_before = $issued_at;
+        $expire = $issued_at + (DAY_IN_SECONDS * 7); // 1 week
+
+        $payload = [
+            'iss' => get_bloginfo('url'),
+            'iat' => $issued_at,
+            'nbf' => $not_before,
+            'exp' => $expire,
+            'data' => [
+                'user' => [
+                    'id' => $user->ID,
+                ],
+            ],
+        ];
+
+        // Basic JWT header
+        $header = json_encode(['typ' => 'JWT', 'alg' => 'HS256']);
+        $base64UrlHeader = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($header));
+        
+        $base64UrlPayload = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode(json_encode($payload)));
+        
+        $signature = hash_hmac('sha256', $base64UrlHeader . "." . $base64UrlPayload, $secret, true);
+        $base64UrlSignature = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($signature));
+        
+        $token = $base64UrlHeader . "." . $base64UrlPayload . "." . $base64UrlSignature;
+    } else {
+        // If we can't find the secret, we might have a problem, but let's try to notify.
+        error_log('SK Google Login: JWT_AUTH_SECRET_KEY not defined!');
+    }
+
+    return rest_ensure_response([
+        'token'             => $token,
+        'user_email'        => $user->user_email,
+        'user_nicename'     => $user->user_nicename,
+        'user_display_name' => $user->display_name,
+        'user_id'           => $user->ID,
+        'is_new_user'       => $is_new_user
+    ]);
+}
+
+/**
+ * Handle Apple Login from the App
+ */
+function sk_apple_login_handler($request) {
+    $identity_token = $request->get_param('identity_token');
+    $apple_user_id = $request->get_param('user'); // Apple's unique user ID (sub)
+    $email_param = $request->get_param('email');
+    $full_name_param = $request->get_param('full_name');
+
+    if (empty($identity_token)) {
+        return new WP_Error('missing_token', 'Brak tokenu Apple', ['status' => 400]);
+    }
+
+    // 1. Decode & Verify Identity Token (JWT)
+    $sections = explode('.', $identity_token);
+    if (count($sections) !== 3) {
+        return new WP_Error('invalid_token_format', 'Nieprawidłowy format tokenu Apple', ['status' => 400]);
+    }
+
+    $payload = json_decode(base64_decode(str_replace(['-', '_'], ['+', '/'], $sections[1])), true);
+
+    if (empty($payload)) {
+        return new WP_Error('invalid_payload', 'Nie udało się zdekodować danych Apple', ['status' => 400]);
+    }
+
+    // 2. Security Checks
+    // a. Verify Issuer
+    if ($payload['iss'] !== 'https://appleid.apple.com') {
+        return new WP_Error('invalid_issuer', 'Nieprawidłowy wystawca tokenu', ['status' => 403]);
+    }
+
+    // b. Verify Audience (Bundle ID)
+    if ($payload['aud'] !== 'com.prawdziwamilosc.app') {
+        return new WP_Error('invalid_audience', 'Token nie jest przeznaczony dla tej aplikacji', ['status' => 403]);
+    }
+
+    // c. Verify Expiration
+    if (time() > $payload['exp']) {
+        return new WP_Error('token_expired', 'Token Apple wygasł', ['status' => 401]);
+    }
+
+    // Use token data as source of truth for email and user id
+    $apple_id = sanitize_text_field($payload['sub']);
+    $email = isset($payload['email']) ? sanitize_email($payload['email']) : $email_param;
+
+    // 3. Find or Create User
+    $user_query = new WP_User_Query([
+        'meta_key' => 'apple_user_id',
+        'meta_value' => $apple_id,
+        'number' => 1
+    ]);
+
+    $user = null;
+    $is_new_user = false;
+
+    if (!empty($user_query->get_results())) {
+        $user = $user_query->get_results()[0];
+    } else {
+        // Try to match by email if available
+        if (!empty($email)) {
+            $user = get_user_by('email', $email);
+            if ($user) {
+                update_user_meta($user->ID, 'apple_user_id', $apple_id);
+            }
+        }
+
+        if (!$user) {
+            // New User Registration
+            $is_new_user = true;
+            
+            // Try to extract first and last name from full name if present
+            $first_name = '';
+            $last_name = '';
+            if (!empty($full_name_param)) {
+                $name_parts = explode(' ', $full_name_param);
+                $first_name = $name_parts[0];
+                if (count($name_parts) > 1) {
+                    unset($name_parts[0]);
+                    $last_name = implode(' ', $name_parts);
+                }
+            }
+
+            // Create a unique human-readable username
+            $username = sk_generate_unique_username($first_name, $last_name, $email, 'apple');
+            $random_password = wp_generate_password(12, true);
+            
+            // If email is missing (sometimes happens if user hides it, but identityToken usually has it)
+            if (empty($email)) {
+                $email = $username . '@apple-user.prawdziwamilosc.pl'; 
+            }
+
+            $user_id = wp_create_user($username, $random_password, $email);
+            
+            if (is_wp_error($user_id)) {
+                return new WP_Error('user_creation_failed', $user_id->get_error_message(), ['status' => 500]);
+            }
+
+            // Wyślij email z powiadomieniem do administratora
+            wp_new_user_notification($user_id, null, 'admin');
+            
+            $user = get_userdata($user_id);
+            update_user_meta($user_id, 'apple_user_id', $apple_id);
+            
+            // Try to set display name from Apple fullName if provided (only provided on first login)
+            if (!empty($full_name_param)) {
+                $display_name = !empty($first_name) ? $first_name : sanitize_text_field($full_name_param);
+                wp_update_user([
+                    'ID' => $user_id,
+                    'display_name' => $display_name
+                ]);
+                
+                if (function_exists('xprofile_set_field_data')) {
+                    xprofile_set_field_data(1, $user_id, $display_name); // Field ID 1 is Name in BuddyPress
+                }
+            }
+
+            // Force onboarding
+            update_user_meta($user_id, 'app_onboarding_complete', false);
+        }
+    }
+
+    // 4. Generate JWT Token (Same logic as Google)
+    $token = '';
+    if (defined('JWT_AUTH_SECRET_KEY')) {
+        $secret = JWT_AUTH_SECRET_KEY;
+        $issued_at = time();
+        $payload_jwt = [
+            'iss' => get_bloginfo('url'),
+            'iat' => $issued_at,
+            'nbf' => $issued_at,
+            'exp' => $issued_at + (DAY_IN_SECONDS * 30), // 30 days for Apple
+            'data' => [
+                'user' => [
+                    'id' => $user->ID,
+                ],
+            ],
+        ];
+
+        $header = json_encode(['typ' => 'JWT', 'alg' => 'HS256']);
+        $base64UrlHeader = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($header));
+        $base64UrlPayload = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode(json_encode($payload_jwt)));
+        $signature = hash_hmac('sha256', $base64UrlHeader . "." . $base64UrlPayload, $secret, true);
+        $base64UrlSignature = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($signature));
+        $token = $base64UrlHeader . "." . $base64UrlPayload . "." . $base64UrlSignature;
+    }
+
+    return rest_ensure_response([
+        'token'             => $token,
+        'user_email'        => $user->user_email,
+        'user_nicename'     => $user->user_nicename,
+        'user_display_name' => $user->display_name,
+        'user_id'           => $user->ID,
+        'is_new_user'       => $is_new_user
+    ]);
+}
 
 function sk_update_onboarding($request) {
     $user_id = get_current_user_id();
@@ -11366,11 +12069,19 @@ function sk_update_onboarding($request) {
     
     $profile_photos_ids = [];
 
+    $first_uploaded_attach_id = null;
+
     for ($i = 1; $i <= 6; $i++) {
         $field_name = "photo_$i";
         if (!empty($files[$field_name]) && $files[$field_name]['error'] === UPLOAD_ERR_OK) {
             // Helper to handle the upload
             $_FILES[$field_name] = $files[$field_name];
+            
+            // SECURITY/CACHE-BUSTING: Ensure unique filename per user/time to defeat CDN/App caching completely
+            $ext = pathinfo($_FILES[$field_name]['name'], PATHINFO_EXTENSION);
+            if (empty($ext)) { $ext = 'jpg'; }
+            $_FILES[$field_name]['name'] = 'user_' . $user_id . '_' . $field_name . '_' . time() . '.' . $ext;
+            
             $attach_id = media_handle_upload($field_name, 0);
 
             if (is_wp_error($attach_id)) {
@@ -11388,7 +12099,11 @@ function sk_update_onboarding($request) {
 
                 $profile_photos_ids[] = $attach_id;
 
-                // First photo is the main avatar
+                if (!$first_uploaded_attach_id) {
+                    $first_uploaded_attach_id = $attach_id;
+                }
+
+                // First explicit photo slot ALWAYS updates avatar
                 if ($i === 1) {
                     update_user_meta($user_id, 'user_avatar_id', $attach_id);
                 }
@@ -15833,10 +16548,10 @@ function hook_bp_avatar_urls_bulletproof($url, $item_id = 0, $object = 'user') {
         if ( ! $hires_url ) $hires_url = wp_get_attachment_image_url($attach_id, 'full');
 
         if ( $hires_url ) {
-            return $hires_url;
+            return add_query_arg('t', time(), $hires_url);
         }
     }
-    return $url;
+    return add_query_arg('t', time(), $url);
 }
 add_filter('bp_core_fetch_avatar_url', 'hook_bp_avatar_urls_bulletproof', 20, 3);
 
@@ -17031,24 +17746,28 @@ function sk_get_activity_feed($request) {
     $page = $request->get_param('page') ?: 1;
     $per_page = $request->get_param('per_page') ?: 20;
     $user_id = $request->get_param('user_id');
-    $type = $request->get_param('type') ?: 'activity_update';
+    $action = $request->get_param('type') ?: 'activity_update';
     
     $args = array(
-        'action' => $type,
         'display_comments' => false,
         'page' => $page,
-        'per_page' => $per_page
+        'per_page' => $per_page,
+        'show_hidden' => true
     );
 
     $display_comments = $request->get_param('display_comments');
     if ($display_comments === 'stream') {
         $args['display_comments'] = 'stream';
-        $args['action'] = 'activity_update,activity_comment';
+        $action = 'activity_update,activity_comment';
     }
 
     if ($user_id) {
-        $args['user_id'] = $user_id;
+        $args['filter'] = array(
+            'user_id' => $user_id,
+            'action' => $action
+        );
     } else {
+        $args['action'] = $action;
         $hidden_users = sk_get_hidden_user_ids();
         if (!empty($hidden_users)) {
             $args['user_id'] = $hidden_users;
@@ -17094,15 +17813,33 @@ function sk_get_activity_feed($request) {
                 $p_clean_content = preg_replace('/<div class="activity-media">.*?<\/div>/s', '', $p_act->content);
                 $p_clean_content = trim($p_clean_content);
                 
+                // Fetch parent post media
+                $p_media = array();
+                $p_media_id = bp_activity_get_meta($p_act->id, 'sk_media_id');
+                $p_media_url = bp_activity_get_meta($p_act->id, 'sk_media_url');
+                
+                if ($p_media_id && $p_media_url) {
+                    $p_media[] = array(
+                        'id' => (int)$p_media_id,
+                        'url' => $p_media_url
+                    );
+                }
+
                 $parent_data = array(
                     'id' => $p_act->id,
                     'user_id' => $p_act->user_id,
                     'name' => bp_core_get_user_displayname($p_act->user_id),
                     'content' => $p_clean_content,
+                    'media' => $p_media,
                     'user_avatar' => array(
                         'full' => bp_core_fetch_avatar(array(
                             'item_id' => $p_act->user_id,
                             'type' => 'full',
+                            'html' => false
+                        )),
+                        'thumb' => bp_core_fetch_avatar(array(
+                            'item_id' => $p_act->user_id,
+                            'type' => 'thumb',
                             'html' => false
                         ))
                     )
@@ -17227,6 +17964,11 @@ function sk_create_activity_post($request) {
     }
     
     $act = $activity['activities'][0];
+    global $wpdb;
+    
+    // Extract media from activity meta
+    $media_id = bp_activity_get_meta($act->id, 'sk_media_id');
+    $media_url = bp_activity_get_meta($act->id, 'sk_media_url');
     
     $response_data = array(
         'id' => $act->id,
@@ -17240,17 +17982,70 @@ function sk_create_activity_post($request) {
                 'item_id' => $act->user_id,
                 'type' => 'full',
                 'html' => false
+            )),
+            'thumb' => bp_core_fetch_avatar(array(
+                'item_id' => $act->user_id,
+                'type' => 'thumb',
+                'html' => false
             ))
         ),
-        'favorited' => false,
-        'favorite_count' => 0,
-        'comment_count' => 0,
+        'parent_content' => null, // Will be filled below if it's a comment
+        'favorited' => bp_activity_is_favorite($act->id, get_current_user_id()),
+        'favorite_count' => (int)(bp_activity_get_meta($act->id, 'favorite_count') ?: 0),
+        'comment_count' => (int)$wpdb->get_var($wpdb->prepare(
+            "SELECT count(*) FROM {$wpdb->prefix}bp_activity WHERE item_id = %d AND type = 'activity_comment'",
+            $act->id
+        )),
         'media' => array()
     );
     
+    if ($act->type === 'activity_comment' && !empty($act->item_id)) {
+        $parent_activities = bp_activity_get_specific(array(
+            'activity_ids' => $act->item_id,
+            'display_comments' => false
+        ));
+        
+        if (!empty($parent_activities['activities'][0])) {
+            $p_act = $parent_activities['activities'][0];
+            $p_clean_content = preg_replace('/<div class="activity-media">.*?<\/div>/s', '', $p_act->content);
+            $p_clean_content = trim($p_clean_content);
+            
+            $p_media = array();
+            $p_media_id = bp_activity_get_meta($p_act->id, 'sk_media_id');
+            $p_media_url = bp_activity_get_meta($p_act->id, 'sk_media_url');
+            
+            if ($p_media_id && $p_media_url) {
+                $p_media[] = array(
+                    'id' => (int)$p_media_id,
+                    'url' => $p_media_url
+                );
+            }
+
+            $response_data['parent_content'] = array(
+                'id' => $p_act->id,
+                'user_id' => $p_act->user_id,
+                'name' => bp_core_get_user_displayname($p_act->user_id),
+                'content' => $p_clean_content,
+                'media' => $p_media,
+                'user_avatar' => array(
+                    'full' => bp_core_fetch_avatar(array(
+                        'item_id' => $p_act->user_id,
+                        'type' => 'full',
+                        'html' => false
+                    )),
+                    'thumb' => bp_core_fetch_avatar(array(
+                        'item_id' => $p_act->user_id,
+                        'type' => 'thumb',
+                        'html' => false
+                    ))
+                )
+            );
+        }
+    }
+    
     if ($media_url) {
         $response_data['media'][] = array(
-            'id' => $media_id,
+            'id' => (int)$media_id,
             'url' => $media_url
         );
     }
@@ -17644,3 +18439,326 @@ function sk_get_all_message_threads($request) {
         'users'    => $users
     );
 }
+
+/**
+ * Dodaje szybki link "Ukryj/Pokaż" do listy użytkowników w panelu admina
+ */
+add_filter('user_row_actions', function($actions, $user_object) {
+    if (current_user_can('edit_users')) {
+        $is_hidden = get_user_meta($user_object->ID, 'sk_is_hidden', true) === '1';
+        $action_url = wp_nonce_url(admin_url("users.php?action=sk_toggle_hide_user&user_id={$user_object->ID}"), 'sk_toggle_hide_user');
+        
+        if ($is_hidden) {
+            $actions['sk_hide'] = "<a href='" . esc_url($action_url) . "' style='color: #d63638; font-weight: bold;'>Pokaż profil (Teraz: Ukryty)</a>";
+        } else {
+            $actions['sk_hide'] = "<a href='" . esc_url($action_url) . "'>Ukryj profil (Shadow Ban)</a>";
+        }
+    }
+    return $actions;
+}, 10, 2);
+
+add_action('admin_init', function() {
+    if (isset($_GET['action']) && $_GET['action'] === 'sk_toggle_hide_user' && isset($_GET['user_id'])) {
+        if (!current_user_can('edit_users') || !check_admin_referer('sk_toggle_hide_user')) {
+            wp_die('Brak uprawnień.');
+        }
+        $user_id = intval($_GET['user_id']);
+        $is_hidden = get_user_meta($user_id, 'sk_is_hidden', true) === '1';
+        
+        if ($is_hidden) {
+            delete_user_meta($user_id, 'sk_is_hidden');
+        } else {
+            update_user_meta($user_id, 'sk_is_hidden', '1');
+        }
+        
+        wp_safe_redirect(wp_get_referer() ? wp_get_referer() : admin_url('users.php'));
+        exit;
+    }
+});
+
+// Automatyczne zapisywanie czasu ostatniego logowania i aktywności użytkownika
+add_action('init', function() {
+    $user_id = get_current_user_id();
+    if ($user_id > 0) {
+        $now = time();
+        $last_update = (int) get_user_meta($user_id, 'sk_last_activity_update_time', true);
+        
+        // Aktualizacja maksymalnie raz na 5 minut (300 sekund)
+        if ($now - $last_update > 300) {
+            $date_str = date("Y-m-d H:i:s");
+            update_user_meta($user_id, 'last_activity', $date_str);
+            update_user_meta($user_id, 'sk_last_activity_update_time', $now);
+            update_user_meta($user_id, 'last_login', $now); // standard Unix timestamp dla logowania
+            
+            // Wykrywanie platformy z User-Agent
+            $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+            $platform = 'Nieznana';
+            if (stripos($ua, 'iPhone') !== false || stripos($ua, 'iPad') !== false || stripos($ua, 'Darwin') !== false || stripos($ua, 'CFNetwork') !== false) {
+                $platform = 'iOS';
+            } elseif (stripos($ua, 'Android') !== false || stripos($ua, 'okhttp') !== false) {
+                $platform = 'Android';
+            } else {
+                if (stripos($ua, 'Windows') !== false || stripos($ua, 'Macintosh') !== false || stripos($ua, 'Linux') !== false) {
+                    $platform = 'Web';
+                }
+            }
+            update_user_meta($user_id, 'sk_device_platform', $platform);
+            
+            if (function_exists('bp_update_user_last_activity')) {
+                bp_update_user_last_activity($user_id, $date_str);
+            }
+        }
+    }
+});
+
+// Wzbogacanie odpowiedzi Better Messages unread_count oraz last_read dla wyświetlania statusów w aplikacji mobilnej
+add_filter('rest_post_dispatch', 'sk_enrich_better_messages_threads_response', 10, 3);
+function sk_enrich_better_messages_threads_response($response, $server, $request) {
+    $route = $request->get_route();
+    
+    // Sprawdzenie czy to ścieżka do wątków Better Messages
+    if (strpos($route, '/better-messages/v1/threads') !== false || 
+        strpos($route, '/better-messages/v1/thread/') !== false ||
+        strpos($route, '/better-messages/v1/getPrivateThread') !== false) {
+        
+        $data = $response->get_data();
+        if (empty($data)) {
+            return $response;
+        }
+
+        global $wpdb;
+        $bm_table = $wpdb->prefix . 'bm_message_recipients';
+        $bp_table = $wpdb->prefix . 'bp_messages_recipients';
+        $has_bm = $wpdb->get_var("SHOW TABLES LIKE '$bm_table'") == $bm_table;
+        $has_bp = $wpdb->get_var("SHOW TABLES LIKE '$bp_table'") == $bp_table;
+        
+        $bm_col = '';
+        $has_last_read = '';
+        if ($has_bm) {
+            $bm_col = $wpdb->get_var("SHOW COLUMNS FROM {$bm_table} LIKE 'unread_count'") ? 'unread_count' : ($wpdb->get_var("SHOW COLUMNS FROM {$bm_table} LIKE 'unread'") ? 'unread' : '');
+            $has_last_read = $wpdb->get_var("SHOW COLUMNS FROM {$bm_table} LIKE 'last_read'") ? 'last_read' : '';
+        }
+
+        // Pomocnik do wzbogacania tablicy uczestników
+        $enrich_participants = function(&$participants, $thread_id) use ($wpdb, $has_bm, $has_bp, $bm_table, $bp_table, $bm_col, $has_last_read) {
+            if (!is_array($participants)) return;
+            foreach ($participants as &$participant) {
+                $user_id = 0;
+                if (is_array($participant)) {
+                    $user_id = isset($participant['user_id']) ? intval($participant['user_id']) : (isset($participant['id']) ? intval($participant['id']) : 0);
+                } elseif (is_object($participant)) {
+                    $user_id = isset($participant->user_id) ? intval($participant->user_id) : (isset($participant->id) ? intval($participant->id) : 0);
+                } elseif (is_numeric($participant)) {
+                    $user_id = intval($participant);
+                }
+
+                if (!$user_id || !$thread_id) continue;
+
+                $unread_count = 0;
+                $last_read = 0;
+
+                // 1. Better Messages
+                if ($has_bm) {
+                    if ($bm_col) {
+                        $unread_count = (int)$wpdb->get_var($wpdb->prepare(
+                            "SELECT {$bm_col} FROM {$bm_table} WHERE thread_id = %d AND user_id = %d",
+                            $thread_id, $user_id
+                        ));
+                    }
+                    if ($has_last_read) {
+                        $last_read = (int)$wpdb->get_var($wpdb->prepare(
+                            "SELECT last_read FROM {$bm_table} WHERE thread_id = %d AND user_id = %d",
+                            $thread_id, $user_id
+                        ));
+                    }
+                }
+
+                // 2. BuddyPress Fallback
+                if (!$unread_count && $has_bp) {
+                    $unread_count = (int)$wpdb->get_var($wpdb->prepare(
+                        "SELECT unread_count FROM {$bp_table} WHERE thread_id = %d AND user_id = %d",
+                        $thread_id, $user_id
+                    ));
+                }
+
+                // Zapisujemy wartości z powrotem do uczestnika
+                if (is_array($participant)) {
+                    $participant['unread'] = $unread_count;
+                    $participant['unread_count'] = $unread_count;
+                    if ($last_read) {
+                        $participant['last_read'] = $last_read;
+                        $participant['last_read_message_id'] = $last_read;
+                    }
+                } elseif (is_object($participant)) {
+                    $participant->unread = $unread_count;
+                    $participant->unread_count = $unread_count;
+                    if ($last_read) {
+                        $participant->last_read = $last_read;
+                        $participant->last_read_message_id = $last_read;
+                    }
+                }
+            }
+        };
+
+        // Wątki (lista): format ['threads' => [...]]
+        if (isset($data['threads']) && is_array($data['threads'])) {
+            foreach ($data['threads'] as &$thread) {
+                $thread_id = isset($thread['thread_id']) ? intval($thread['thread_id']) : (isset($thread['id']) ? intval($thread['id']) : 0);
+                if (isset($thread['participants']) && is_array($thread['participants'])) {
+                    $enrich_participants($thread['participants'], $thread_id);
+                }
+                if (isset($thread['recipients']) && is_array($thread['recipients'])) {
+                    $enrich_participants($thread['recipients'], $thread_id);
+                }
+            }
+        }
+        // Pojedynczy wątek
+        else {
+            $thread_id = 0;
+            if (is_array($data)) {
+                $thread_id = isset($data['thread_id']) ? intval($data['thread_id']) : (isset($data['id']) ? intval($data['id']) : 0);
+            } elseif (is_object($data)) {
+                $thread_id = isset($data->thread_id) ? intval($data->thread_id) : (isset($data->id) ? intval($data->id) : 0);
+            }
+
+            if ($thread_id > 0) {
+                if (is_array($data)) {
+                    if (isset($data['participants']) && is_array($data['participants'])) {
+                        $enrich_participants($data['participants'], $thread_id);
+                    }
+                    if (isset($data['recipients']) && is_array($data['recipients'])) {
+                        $enrich_participants($data['recipients'], $thread_id);
+                    }
+                } elseif (is_object($data)) {
+                    if (isset($data->participants) && is_array($data->participants)) {
+                        $enrich_participants($data->participants, $thread_id);
+                    }
+                    if (isset($data->recipients) && is_array($data->recipients)) {
+                        $enrich_participants($data->recipients, $thread_id);
+                    }
+                }
+            }
+        }
+
+        $response->set_data($data);
+    }
+    
+    return $response;
+}
+
+// ========================================
+// Admin Dashboard REST API Endpoint
+// ========================================
+add_action('rest_api_init', function () {
+    register_rest_route('sk/v1', '/admin/dashboard', [
+        'methods' => 'GET',
+        'callback' => 'sk_admin_dashboard_endpoint',
+        'permission_callback' => function() {
+            return current_user_can('manage_options');
+        }
+    ]);
+});
+
+function sk_admin_dashboard_endpoint() {
+    global $wpdb;
+    
+    // 1. Users List (ordered by registration, limit 100)
+    $users_query = $wpdb->get_results("SELECT ID, user_login, display_name, user_registered FROM {$wpdb->users} ORDER BY user_registered DESC LIMIT 100");
+    $users = [];
+    foreach ($users_query as $u) {
+        $last_login = get_user_meta($u->ID, 'last_login', true);
+        $last_activity = get_user_meta($u->ID, 'last_activity', true);
+        
+        // Format last activity
+        $activity_status = 'Nigdy';
+        if ($last_activity) {
+            $activity_status = sk_format_activity_status($last_activity, true);
+        }
+        
+        $platform = get_user_meta($u->ID, 'sk_device_platform', true) ?: 'Nieznana';
+        
+        $users[] = [
+            'id' => $u->ID,
+            'username' => $u->user_login,
+            'name' => $u->display_name,
+            'registered' => $u->user_registered,
+            'last_login' => $last_login ? date("Y-m-d H:i:s", $last_login) : 'Nigdy',
+            'last_activity' => $activity_status,
+            'platform' => $platform
+        ];
+    }
+    
+    // 2. Matches
+    $likes_query = $wpdb->get_results("SELECT user_id, meta_value FROM {$wpdb->usermeta} WHERE meta_key = 'sk_user_likes'");
+    $likes = [];
+    foreach ($likes_query as $row) {
+        $likes_array = maybe_unserialize($row->meta_value);
+        if (is_array($likes_array)) {
+            $likes[$row->user_id] = array_map('intval', $likes_array);
+        }
+    }
+    
+    $matches = [];
+    foreach ($likes as $user_id => $user_likes) {
+        foreach ($user_likes as $liked_id) {
+            if ($liked_id > $user_id) {
+                if (isset($likes[$liked_id]) && in_array($user_id, $likes[$liked_id])) {
+                    $user1 = get_userdata($user_id);
+                    $user2 = get_userdata($liked_id);
+                    if ($user1 && $user2) {
+                        $matches[] = [
+                            'user1_id' => $user_id,
+                            'user1_name' => $user1->display_name,
+                            'user2_id' => $liked_id,
+                            'user2_name' => $user2->display_name,
+                            'time' => date("Y-m-d H:i:s")
+                        ];
+                    }
+                }
+            }
+        }
+    }
+    
+    // 3. Recent Messages (Better Messages)
+    $messages_query = $wpdb->get_results("
+        SELECT m.id, m.thread_id, m.sender_id, m.message, m.date_sent 
+        FROM {$wpdb->prefix}bm_message_messages m
+        ORDER BY m.date_sent DESC LIMIT 50
+    ");
+    
+    $messages = [];
+    foreach ($messages_query as $msg) {
+        $sender = get_userdata($msg->sender_id);
+        $sender_name = $sender ? $sender->display_name : 'Unknown';
+        
+        $recipients_query = $wpdb->get_col($wpdb->prepare(
+            "SELECT user_id FROM {$wpdb->prefix}bm_message_recipients WHERE thread_id = %d AND user_id != %d",
+            $msg->thread_id, $msg->sender_id
+        ));
+        
+        $recipients_names = [];
+        foreach ($recipients_query as $rid) {
+            $rec = get_userdata($rid);
+            if ($rec) {
+                $recipients_names[] = $rec->display_name;
+            }
+        }
+        
+        $messages[] = [
+            'id' => $msg->id,
+            'thread_id' => $msg->thread_id,
+            'sender_id' => $msg->sender_id,
+            'sender_name' => $sender_name,
+            'recipient_name' => !empty($recipients_names) ? implode(', ', $recipients_names) : 'Brak',
+            'message' => $msg->message,
+            'date_sent' => $msg->date_sent
+        ];
+    }
+    
+    return rest_ensure_response([
+        'users' => $users,
+        'matches' => $matches,
+        'messages' => $messages
+    ]);
+}
+

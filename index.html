@@ -4,7 +4,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Scroll Indicator Added</title>
+  <title>Prawdziwa Miłość</title>
+  <meta name="apple-itunes-app" content="app-id=6758733087">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
   <style>
     html,
@@ -223,7 +224,6 @@
     /* TESTFLIGHT BANNER */
     .tf-promo {
       position: fixed;
-      top: 25%;
       left: -450px;
       /* Początkowo ukryty */
       z-index: 1000;
@@ -232,15 +232,15 @@
       background: rgba(255, 255, 255, 0.08);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
-      padding: 14px 24px;
-      border-radius: 0 40px 40px 0;
+      padding: 18px 28px;
+      border-radius: 0 45px 45px 0;
       border: 1px solid rgba(255, 255, 255, 0.15);
       border-left: none;
       box-shadow: 0 15px 45px rgba(0, 0, 0, 0.4);
       cursor: pointer;
       text-decoration: none;
       transition: background 0.3s ease;
-      max-width: 380px;
+      max-width: 480px;
       pointer-events: auto;
     }
 
@@ -249,20 +249,28 @@
     }
 
     .tf-icon {
+      width: 50px;
+      height: auto;
+      margin-right: 20px;
+      object-fit: contain;
+    }
+
+    .tf-app-icon {
       width: 54px;
       height: 54px;
       border-radius: 14px;
-      margin-right: 18px;
+      margin-left: 20px;
       box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
       border: 1px solid rgba(255, 255, 255, 0.2);
     }
 
     .tf-content {
       color: #fff;
+      flex: 1;
     }
 
     .tf-text {
-      font-size: 0.9rem;
+      font-size: 1rem;
       font-weight: 500;
       line-height: 1.4;
       margin: 0;
@@ -273,29 +281,38 @@
       display: block;
       color: #ff6b9d;
       font-weight: 700;
-      font-size: 0.95rem;
-      margin-top: 3px;
+      font-size: 1.05rem;
+      margin-top: 5px;
     }
 
+    .tf-promo-ios { top: 15%; }
+    .tf-promo-android { top: 27%; }
+
     @media (max-width: 760px) {
+      .tf-promo-ios { top: 12%; }
+      .tf-promo-android { top: 25%; }
       .tf-promo {
-        top: 20%;
-        padding: 10px 18px;
-        max-width: 290px;
+        padding: 12px 20px;
+        max-width: 340px;
       }
 
       .tf-icon {
+        width: 40px;
+        margin-right: 15px;
+      }
+
+      .tf-app-icon {
         width: 44px;
         height: 44px;
-        margin-right: 12px;
+        margin-left: 15px;
       }
 
       .tf-text {
-        font-size: 0.78rem;
+        font-size: 0.85rem;
       }
 
       .tf-highlight {
-        font-size: 0.82rem;
+        font-size: 0.9rem;
       }
     }
   </style>
@@ -309,16 +326,30 @@
     <a href="https://prawdziwamilosc.pl/logowanie" class="nav-btn btn-login">Zaloguj</a>
   </div>
 
-  <!-- TESTFLIGHT PROMO -->
-  <a href="https://testflight.apple.com/v1/invite/bee8c793445b482ab9e6e8c9fce4eb8bfd5737ad90dd49f4bdfe1be2f41b6f9f192da151f?ct=4X2H532KV6&advp=10000&platform=ios"
-    class="tf-promo" target="_blank">
-    <img src="https://prawdziwamilosc.pl/icon.png" alt="Prawdziwa Miłość Icon" class="tf-icon">
+  <!-- APP STORE PROMO -->
+  <a href="https://apps.apple.com/app/id6758733087"
+    class="tf-promo tf-promo-ios" target="_blank">
+    <img src="https://prawdziwamilosc.pl/apple_store.png" alt="App Store" class="tf-icon">
     <div class="tf-content">
       <p class="tf-text">
-        Testuj aplikację "Prawdziwa Miłość" na iPhone,
-        <span class="tf-highlight">zgarnij Premium na 6 miesięcy za free</span>
+        Pobierz aplikację "Prawdziwa Miłość" na iPhone,
+        <span class="tf-highlight">Twoja droga do Prawdziwej Miłości</span>
       </p>
     </div>
+    <img src="https://prawdziwamilosc.pl/icon1.png" alt="Prawdziwa Miłość Icon" class="tf-app-icon">
+  </a>
+
+  <!-- GOOGLE PLAY PROMO -->
+  <a href="https://play.google.com/store/apps/details?id=com.prawdziwamilosc.app"
+    class="tf-promo tf-promo-android" target="_blank">
+    <img src="https://prawdziwamilosc.pl/google_store.png" alt="Google Play" class="tf-icon">
+    <div class="tf-content">
+      <p class="tf-text">
+        Pobierz aplikację "Prawdziwa Miłość" na Android,
+        <span class="tf-highlight">Dopasowanie oparte na Wartościach</span>
+      </p>
+    </div>
+    <img src="https://prawdziwamilosc.pl/icon1.png" alt="Prawdziwa Miłość Icon" class="tf-app-icon">
   </a>
 
   <div id="bgContainer">
@@ -639,11 +670,12 @@
         { opacity: 1, y: 0, duration: 2.0, delay: 0.2, ease: 'power3.out' }
       );
 
-      // Slide in TestFlight promo
+      // Slide in promos sequentially (stagger)
       gsap.to('.tf-promo', {
         x: '450px',
         duration: 1.5,
         delay: 2.5,
+        stagger: 0.3, // Sekwencyjne wysuwanie (drugi wysuwa się 0.3s później)
         ease: 'power4.out'
       });
     });
