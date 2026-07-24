@@ -3154,6 +3154,15 @@ function sk_toggle_like_user_ajax()
 
     $is_already_liked = in_array($liked_id, $my_likes);
 
+    // Weryfikacja: Tylko zweryfikowani użytkownicy mogą lajkować (chyba że to un-like lub admin)
+    if (!$is_already_liked) {
+        $liker_status = get_user_meta($liker_id, 'sk_verification_status', true) ?: 'none';
+        if ($liker_status !== 'verified' && !user_can($liker_id, 'manage_options')) {
+            wp_send_json_error('Aby móc polubić profil innego użytkownika, musisz najpierw zweryfikować swoje konto za pomocą zdjęcia z gestem.');
+            return;
+        }
+    }
+
     if ($is_already_liked) {
         // --- ODLUBIENIE (UNLIKE) ---
 
@@ -7469,6 +7478,16 @@ function pm_strict_match_validation($errors, $recipients)
             return $errors;
         }
 
+        // Weryfikacja: Tylko zweryfikowani użytkownicy mogą wysyłać wiadomości
+        $sender_status = get_user_meta($sender_id, 'sk_verification_status', true) ?: 'none';
+        if ($sender_status !== 'verified') {
+            $errors->add(
+                'not_verified_error',
+                __('Musisz najpierw zweryfikować swój profil za pomocą zdjęcia z gestem (w zakładce Profil), aby móc wysyłać wiadomości.', 'buddypress')
+            );
+            return $errors;
+        }
+
         // BYPASS: Existing Thread Reply (Improve context detection)
         $is_reply = false;
         $request_uri = $_SERVER['REQUEST_URI'] ?? '';
@@ -7651,6 +7670,17 @@ function pm_bm_can_send_message_filter($allowed, $user_id, $thread_id) {
         // Admin bypass
         if (user_can($user_id, 'manage_options')) {
             return $allowed;
+        }
+
+        // Weryfikacja: Tylko zweryfikowani użytkownicy mogą wysyłać wiadomości
+        $sender_status = get_user_meta($user_id, 'sk_verification_status', true) ?: 'none';
+        if ($sender_status !== 'verified') {
+            global $bp_better_messages_restrict_send_message;
+            if (!is_array($bp_better_messages_restrict_send_message)) {
+                $bp_better_messages_restrict_send_message = [];
+            }
+            $bp_better_messages_restrict_send_message['not_verified_error'] = 'Musisz najpierw zweryfikować swój profil za pomocą zdjęcia z gestem (w zakładce Profil), aby móc wysyłać wiadomości.';
+            return false;
         }
 
         // Global override bypass
@@ -10830,6 +10860,14 @@ function sk_toggle_like_endpoint($request) {
     
     $is_mutual_match_possible = in_array($liked_id, $liker_liked_by_list, true);
     $is_already_liked = in_array($liked_id, $my_likes, true);
+
+    // Weryfikacja: Tylko zweryfikowani użytkownicy mogą lajkować (chyba że to un-like lub admin)
+    if (!$is_already_liked) {
+        $liker_status = get_user_meta($liker_id, 'sk_verification_status', true) ?: 'none';
+        if ($liker_status !== 'verified' && !user_can($liker_id, 'manage_options')) {
+            return new WP_Error('not_verified', 'Aby móc polubić profil innego użytkownika, musisz najpierw zweryfikować swoje konto za pomocą zdjęcia z gestem (w zakładce Profil).', ['status' => 403]);
+        }
+    }
     
     error_log("my_likes: " . json_encode($my_likes));
     error_log("liked_by: " . json_encode($liked_by));
